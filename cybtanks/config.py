@@ -14,6 +14,10 @@ MAP_FILES = (
     DATA_DIR / "map_2.txt",
     DATA_DIR / "map_3.txt",
     DATA_DIR / "map_4.txt",
+    DATA_DIR / "map_5.txt",
+    DATA_DIR / "map_6.txt",
+    DATA_DIR / "map_7.txt",
+    DATA_DIR / "map_8.txt",
 )
 SPAWN_DATA_FILE = DATA_DIR / "spawns.csv"
 

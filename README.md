@@ -37,7 +37,7 @@ py main.py
 
 `data/enemies.csv` utiliza encabezados descriptivos en español. Las velocidades y cadencias disponibles están en `cybtanks/config.py`, y `data/tank_attribute_options.csv` resume sus valores, unidades y formatos permitidos.
 
-Los niveles rotan entre cuatro escenarios. Para modificarlos, edita `data/map.txt` y `data/map_2.txt` a `data/map_4.txt` sin cambiar sus dimensiones. Los sprites SVG se pueden abrir en un editor de texto o en cualquier editor vectorial.
+Los niveles rotan entre ocho escenarios. Para modificarlos, edita `data/map.txt` y `data/map_2.txt` a `data/map_8.txt` sin cambiar sus dimensiones. Los sprites SVG se pueden abrir en un editor de texto o en cualquier editor vectorial.
 
 El tile `3` representa un hoyo. Bloquea tanques, empujes, respawns y rutas A*, pero las balas, la visión y los cálculos de rebote pasan por encima sin colisionar.
 
