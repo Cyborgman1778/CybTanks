@@ -45,7 +45,7 @@ El tile `3` representa un hoyo. Bloquea tanques, empujes, respawns y rutas A*, p
 
 Pulsa `Espacio` durante la partida para colocar una mina. El jugador puede mantener dos minas activas. Una bala o un tanque la hacen explotar instantáneamente. Si nadie la toca, a los ocho segundos inicia un aviso de parpadeo y pitidos durante 1,5 segundos y después explota.
 
-La explosión tiene tres tiles de diámetro, destruye tanques y rompe únicamente las paredes marcadas con `2` en `data/map.txt`.
+La explosión tiene tres tiles de diámetro, destruye tanques y rompe únicamente las paredes marcadas con `2` en el mapa activo.
 Si otra mina se encuentra dentro del radio, ambas explotan en el mismo frame y la reacción puede continuar en cadena.
 
 Los enemigos móviles consideran el radio de las minas como una zona peligrosa, buscan la salida segura más cercana y no vuelven a cruzarla mientras la mina siga activa. El gris claro conserva su propiedad de permanecer inmóvil.
