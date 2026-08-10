@@ -53,13 +53,19 @@ El amarillo aparece a partir del nivel 5. Comparte disparo e inteligencia con el
 
 Los enemigos reservan destinos diferentes alrededor del jugador y penalizan las rutas que ya utilizan sus aliados. Si encuentran un tanque bloqueando el paso o dejan de avanzar, recalculan una ruta alternativa. También descartan disparos y colocaciones de minas que pondrían directamente a un aliado en peligro.
 
+## Enemigo Verde Oscuro
+
+El verde oscuro aparece a partir del nivel 8. Se mueve como el gris oscuro, utiliza proyectiles rápidos y tiene inteligencia media con una probabilidad mayor de calcular correctamente los rebotes. Sus balas rápidas muestran una llama animada detrás del proyectil.
+
 Cada tanque móvil recibe una semilla de ruta distinta al comenzar y recuerda las últimas celdas recorridas. Esto cambia los desempates de A*, evita bucles y hace que una misma posición inicial pueda producir caminos diferentes entre intentos.
 
 ## Vidas
 
-El jugador comienza cada nivel con tres vidas. Al perder una vida se limpian balas y minas, el mapa recupera todos sus muros y los enemigos supervivientes regresan a sus puntos de aparición. Los enemigos que ya fueron destruidos permanecen destruidos. Después el jugador reaparece en la celda segura más cercana.
+El jugador comienza la partida con tres vidas y conserva las restantes al avanzar de nivel. Al superar los niveles 5, 10, 15 y sucesivos recibe una vida adicional acumulable.
 
-Cuando se agotan las tres vidas se reinicia el nivel completo y regresan todos sus enemigos.
+Al perder una vida se limpian balas y minas, el mapa recupera todos sus muros y los enemigos supervivientes regresan a sus puntos de aparición. Los enemigos que ya fueron destruidos permanecen destruidos. Después el jugador reaparece en la celda segura más cercana.
+
+Cuando se agotan todas las vidas se reinicia el nivel completo y regresan todos sus enemigos con tres vidas iniciales.
 
 ## Empuje Entre Tanques
 
@@ -67,6 +73,6 @@ El movimiento vuelve a responder inmediatamente a los controles, sin inercia ni 
 
 ## Pensamiento De Disparo
 
-`tiempo_pensar_disparo` en `data/enemies.csv` es distinto de `cadencia_disparo`. Cuando desaparece una bala propia, el tanque debe esperar este nuevo tiempo antes de poder disparar otra: `slow=0.90`, `medium=0.50` y `fast=0.15` segundos. El jugador usa rápido, los grises lento y el amarillo medio.
+`tiempo_pensar_disparo` en `data/enemies.csv` es distinto de `cadencia_disparo`. Cuando desaparece una bala propia, el tanque debe esperar este nuevo tiempo antes de poder disparar otra: `slow=0.90`, `medium=0.50` y `fast=0.15` segundos. El jugador usa rápido, el amarillo medio y los demás tipos usan lento.
 
 Las balas del jugador necesitan recorrer una distancia mínima antes de poder rebotar. Si se dispara directamente contra una pared estando pegado a ella, el proyectil se rompe en vez de rebotar. La distancia se configura con `PLAYER_MIN_RICOCHET_DISTANCE` en `cybtanks/config.py`.

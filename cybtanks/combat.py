@@ -63,6 +63,7 @@ class CombatSystem:
                 team=tank.team,
                 owner_id=tank.tank_id,
                 color=(187, 233, 241) if tank.team == "player" else (220, 211, 174),
+                speed_class=tank.bullet_speed_class,
                 max_bounces=tank.max_bounces,
             )
         )

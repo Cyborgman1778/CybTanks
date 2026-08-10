@@ -23,6 +23,7 @@ class Tank:
     turret_angle: float
     speed: float
     color: tuple[int, int, int]
+    bullet_speed_class: str
     bullet_speed: float
     max_bullets: int
     max_bounces: int
@@ -61,6 +62,7 @@ class Bullet:
     team: str
     owner_id: int
     color: tuple[int, int, int]
+    speed_class: str = "slow"
     max_bounces: int = MAX_BOUNCES
     bounces: int = 0
     age: float = 0.0

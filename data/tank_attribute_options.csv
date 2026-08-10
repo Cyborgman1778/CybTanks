@@ -1,5 +1,5 @@
 cualidad,tipo_de_dato,opciones_validas,unidad_o_formato,descripcion
-tipo_id,opcion,"light_gray; dark_gray; yellow",texto sin espacios,Identificador interno de los tipos disponibles
+tipo_id,opcion,"light_gray; dark_gray; yellow; dark_green",texto sin espacios,Identificador interno de los tipos disponibles
 nombre_visible,texto,Texto libre,texto,Nombre mostrado para el tanque
 color_hex,texto,Valores hexadecimales,#RRGGBB,Color principal del tanque
 velocidad_movimiento,opcion,"stopped=0; slow=58; medium=125; fast=180",píxeles por segundo,Velocidad de desplazamiento
@@ -7,7 +7,7 @@ velocidad_bala,opcion,"slow=230; fast=400",píxeles por segundo,Velocidad de los
 maximo_balas,entero,0 o mayor,balas activas,Número máximo de balas simultáneas en el tablero
 rebotes_bala,entero,0 o mayor,rebotes,Cantidad máxima de rebotes por proyectil
 maximo_minas,entero,0 o mayor,minas activas,Número máximo de minas simultáneas en el tablero
-vidas,entero,0 o mayor,vidas disponibles,Número de intentos del jugador antes de reiniciar el nivel
+vidas,entero,"3 iniciales; +1 cada 5 niveles superados",vidas disponibles,Número acumulable de intentos del jugador
 cadencia_disparo,opcion,"slow=0.75; normal=0.38; fast=0.16",segundos,Tiempo mínimo entre disparos
 tiempo_pensar_disparo,opcion,"slow=0.90; medium=0.50; fast=0.15",segundos,Espera desde que desaparece una bala propia hasta poder volver a disparar
 nivel_inteligencia,opcion,"player; medium; medium_low",categoría,Nivel general de inteligencia

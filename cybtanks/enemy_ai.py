@@ -314,7 +314,12 @@ class EnemyAISystem:
             enemy.shot_ready = False
         elif enemy.aim_timer <= 0 or enemy.aim_angle is None:
             enemy.aim_angle, enemy.shot_ready = self.choose_shot(enemy)
-            enemy.aim_timer = 0.35 if enemy.ricochet_accuracy == "accurate" else 0.5
+            if enemy.ricochet_accuracy == "accurate":
+                enemy.aim_timer = 0.35
+            elif enemy.intelligence == "medium":
+                enemy.aim_timer = 0.4
+            else:
+                enemy.aim_timer = 0.5
 
         desired_angle = enemy.aim_angle if enemy.aim_angle is not None else direct_angle
         enemy.turret_angle = turn_towards(enemy.turret_angle, desired_angle, 2.25 * dt)

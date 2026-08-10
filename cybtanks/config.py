@@ -18,7 +18,7 @@ BULLET_RADIUS = 4.5
 MAX_BOUNCES = 1
 MAX_PLAYER_BULLETS = 5
 MAX_PLAYER_MINES = 2
-MAX_PLAYER_LIVES = 3
+PLAYER_STARTING_LIVES = 3
 MINE_AUTO_TRIGGER_TIME = 8.0
 MINE_WARNING_DURATION = 1.5
 MINE_COLLISION_RADIUS = 11.0
@@ -74,8 +74,11 @@ ASSET_NAMES = (
     "dark_gray_turret",
     "yellow_body",
     "yellow_turret",
+    "dark_green_body",
+    "dark_green_turret",
     "bullet_player",
     "bullet_enemy",
+    "bullet_flame",
     "mine",
     "mine_warning",
 )

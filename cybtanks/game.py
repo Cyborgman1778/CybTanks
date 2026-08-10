@@ -15,13 +15,13 @@ from .config import (
     HUD_HEIGHT,
     MAX_BOUNCES,
     MAX_PLAYER_BULLETS,
-    MAX_PLAYER_LIVES,
     MAX_PLAYER_MINES,
     MOVEMENT_SPEEDS,
     PLAYER_BULLET_SPEED,
     PLAYER_COLOR,
     PLAYER_FIRE_RATE,
     PLAYER_SHOT_THINK_SPEED,
+    PLAYER_STARTING_LIVES,
     PLAYER_SPEED,
     TILE,
     WINDOW_SIZE,
@@ -76,6 +76,7 @@ class Game:
         if is_player:
             speed = PLAYER_SPEED
             color = PLAYER_COLOR
+            bullet_speed_class = "slow"
             bullet_speed = PLAYER_BULLET_SPEED
             max_bullets = MAX_PLAYER_BULLETS
             max_bounces = MAX_BOUNCES
@@ -90,7 +91,8 @@ class Game:
             config = self.enemy_catalog[kind]
             speed = MOVEMENT_SPEEDS[config["velocidad_movimiento"]]
             color = parse_hex_color(config["color_hex"])
-            bullet_speed = BULLET_SPEEDS[config["velocidad_bala"]]
+            bullet_speed_class = config["velocidad_bala"]
+            bullet_speed = BULLET_SPEEDS[bullet_speed_class]
             max_bullets = int(config["maximo_balas"])
             max_bounces = int(config["rebotes_bala"])
             max_mines = int(config["maximo_minas"])
@@ -111,6 +113,7 @@ class Game:
             turret_angle=0.0 if is_player else math.pi,
             speed=speed,
             color=color,
+            bullet_speed_class=bullet_speed_class,
             bullet_speed=bullet_speed,
             max_bullets=max_bullets,
             max_bounces=max_bounces,
@@ -131,13 +134,15 @@ class Game:
 
     def reset_campaign(self) -> None:
         self.level = 1
-        self.start_level()
+        self.lives = PLAYER_STARTING_LIVES
+        self.start_level(reset_lives=False)
 
-    def start_level(self) -> None:
+    def start_level(self, reset_lives: bool = True) -> None:
         self.next_tank_id = 1
         self.elapsed = 0.0
         self.state = "playing"
-        self.lives = MAX_PLAYER_LIVES
+        if reset_lives:
+            self.lives = PLAYER_STARTING_LIVES
         self.world.reset()
         self.renderer.rebuild_board_background()
         self.bullets = []
@@ -153,8 +158,10 @@ class Game:
         self.mouse_world = self.player.position + Vec2(TILE * 2, 0)
 
     def next_level(self) -> None:
+        if self.level % 5 == 0:
+            self.lives += 1
         self.level += 1
-        self.start_level()
+        self.start_level(reset_lives=False)
 
     def respawn_player(self) -> None:
         if self.lives <= 0:

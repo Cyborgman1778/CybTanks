@@ -17,7 +17,6 @@ from .config import (
     LIGHT_GRAY,
     MINE_WARNING_DURATION,
     MAX_PLAYER_BULLETS,
-    MAX_PLAYER_LIVES,
     MUTED,
     PLAYER_COLOR,
     ROWS,
@@ -121,6 +120,12 @@ class Renderer:
 
     def _draw_bullet(self, surface: pygame.Surface, bullet: Bullet) -> None:
         direction = bullet.velocity.normalize() if bullet.velocity.length_squared() else Vec2(1, 0)
+        angle = -math.degrees(math.atan2(direction.y, direction.x))
+        if bullet.speed_class == "fast":
+            pulse = 0.9 + math.sin(self.game.elapsed * 34 + bullet.position.x * 0.03) * 0.12
+            flame = pygame.transform.rotozoom(self.assets["bullet_flame"], angle, pulse)
+            flame_center = bullet.position - direction * 17
+            surface.blit(flame, flame.get_rect(center=flame_center))
         rear = bullet.position - direction * 8
         pygame.draw.line(
             surface,
@@ -132,7 +137,7 @@ class Renderer:
         sprite_name = "bullet_player" if bullet.team == "player" else "bullet_enemy"
         sprite = pygame.transform.rotozoom(
             self.assets[sprite_name],
-            -math.degrees(math.atan2(direction.y, direction.x)),
+            angle,
             1,
         )
         surface.blit(sprite, sprite.get_rect(center=bullet.position))
@@ -203,7 +208,7 @@ class Renderer:
         )
         screen.blit(controls, (285, 23))
         rule = self.small_font.render(
-            "CLARO: REBOTE PRECISO   //   OSCURO: REBOTE IMPRECISO",
+            "VERDE: BALA RAPIDA + IA MEDIA   //   AMARILLO: VELOCIDAD + MINAS",
             True,
             CREAM,
         )
@@ -216,7 +221,7 @@ class Renderer:
             status = f"NIVEL {self.game.level:02d} SUPERADO"
             status_color = (132, 232, 211)
         elif self.game.state == "life_lost":
-            status = f"VIDA PERDIDA   VIDAS: {self.game.lives}/{MAX_PLAYER_LIVES}"
+            status = f"VIDA PERDIDA   VIDAS: {self.game.lives}"
             status_color = (255, 181, 112)
         elif self.game.state == "game_over":
             status = "SIN VIDAS"
@@ -226,7 +231,7 @@ class Renderer:
                 f"NIVEL {self.game.level:02d}   HOSTILES: {remaining}   "
                 f"BALAS: {player_bullets}/{MAX_PLAYER_BULLETS}   "
                 f"MINAS: {player_mines}/{self.game.player.max_mines}   "
-                f"VIDAS: {self.game.lives}/{MAX_PLAYER_LIVES}"
+                f"VIDAS: {self.game.lives}"
             )
             status_color = LIGHT_GRAY
         status_surface = self.hud_font.render(status, True, status_color)
