@@ -2,4 +2,4 @@ tipo_id,nombre_visible,color_hex,velocidad_movimiento,velocidad_bala,maximo_bala
 light_gray,Gris claro,#CACFCA,stopped,slow,1,1,0,slow,slow,medium,accurate,1.0,true,"No se mueve; 0 minas; cadencia lenta; pensamiento de disparo lento; calcula rebotes seguros y precisos"
 dark_gray,Gris oscuro,#5B635D,slow,slow,1,1,0,slow,slow,medium_low,imperfect,0.58,true,"Se mueve lento; 0 minas; cadencia lenta; pensamiento de disparo lento; sus rebotes a veces fallan"
 yellow,Amarillo,#E4C84A,fast,slow,1,1,3,slow,medium,medium_low,imperfect,0.58,true,"Como el gris oscuro; se mueve rápido; pensamiento de disparo medio y puede colocar hasta 3 minas"
-dark_green,Verde oscuro,#28543A,slow,fast,1,1,0,slow,slow,medium,imperfect,0.78,true,"Como el gris oscuro; dispara balas rápidas y calcula mejor sus rebotes"
+dark_green,Verde oscuro,#28543A,slow,fast,1,0,0,slow,slow,medium,imperfect,0.78,true,"Como el gris oscuro; dispara balas rápidas que no rebotan"

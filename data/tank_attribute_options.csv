@@ -3,7 +3,7 @@ tipo_id,opcion,"light_gray; dark_gray; yellow; dark_green",texto sin espacios,Id
 nombre_visible,texto,Texto libre,texto,Nombre mostrado para el tanque
 color_hex,texto,Valores hexadecimales,#RRGGBB,Color principal del tanque
 velocidad_movimiento,opcion,"stopped=0; slow=58; medium=125; fast=180",píxeles por segundo,Velocidad de desplazamiento
-velocidad_bala,opcion,"slow=230; fast=400",píxeles por segundo,Velocidad de los proyectiles
+velocidad_bala,opcion,"slow=230; fast=430",píxeles por segundo,Velocidad de los proyectiles
 maximo_balas,entero,0 o mayor,balas activas,Número máximo de balas simultáneas en el tablero
 rebotes_bala,entero,0 o mayor,rebotes,Cantidad máxima de rebotes por proyectil
 maximo_minas,entero,0 o mayor,minas activas,Número máximo de minas simultáneas en el tablero

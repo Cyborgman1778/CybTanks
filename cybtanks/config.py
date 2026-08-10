@@ -46,7 +46,7 @@ MOVEMENT_SPEEDS = {
 }
 BULLET_SPEEDS = {
     "slow": 230.0,
-    "fast": 400.0,
+    "fast": 430.0,
 }
 FIRE_RATE_DELAYS = {
     "slow": 0.75,
