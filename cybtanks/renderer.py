@@ -38,6 +38,7 @@ class Renderer:
         self.hud_font = pygame.font.SysFont("consolas", 16, bold=True)
         self.small_font = pygame.font.SysFont("consolas", 12, bold=True)
         self.end_font = pygame.font.SysFont("impact", 61)
+        self.effect_layer = pygame.Surface((BOARD_WIDTH, BOARD_HEIGHT), pygame.SRCALPHA)
         self.board_background = self._build_board_background()
 
     @staticmethod
@@ -71,6 +72,76 @@ class Renderer:
 
     def rebuild_board_background(self) -> None:
         self.board_background = self._build_board_background()
+
+    def draw_tracks(self, surface: pygame.Surface) -> None:
+        if not self.game.track_marks:
+            return
+        self.effect_layer.fill((0, 0, 0, 0))
+        for track in self.game.track_marks:
+            remaining = clamp(1.0 - track.age / track.lifetime, 0.0, 1.0)
+            alpha = int(112 * remaining**1.7)
+            direction = Vec2(math.cos(track.angle), math.sin(track.angle))
+            lateral = Vec2(-direction.y, direction.x)
+            half_segment = direction * 3.2
+            tread_edge = lateral * 2.1
+            for side in (-1, 1):
+                center = track.position + lateral * (13 * side)
+                pygame.draw.line(
+                    self.effect_layer,
+                    (28, 33, 27, alpha),
+                    center - half_segment,
+                    center + half_segment,
+                    5,
+                )
+                pygame.draw.line(
+                    self.effect_layer,
+                    (113, 105, 78, alpha // 4),
+                    center - tread_edge,
+                    center + tread_edge,
+                    1,
+                )
+        surface.blit(self.effect_layer, (0, 0))
+
+    def draw_explosions(self, surface: pygame.Surface) -> None:
+        if not self.game.explosions:
+            return
+        self.effect_layer.fill((0, 0, 0, 0))
+        for explosion in self.game.explosions:
+            progress = clamp(explosion.age / explosion.duration, 0.0, 1.0)
+            fade = 1.0 - progress
+            expansion_progress = min(1.0, progress / 0.42)
+            expansion = 1.0 - (1.0 - expansion_progress) ** 3
+            radius = max(1, int(explosion.radius * expansion))
+            center = (round(explosion.position.x), round(explosion.position.y))
+
+            pygame.draw.circle(
+                self.effect_layer,
+                (255, 91, 44, int(68 * fade)),
+                center,
+                radius,
+            )
+            core_radius = max(1, int(radius * (0.25 + fade * 0.18)))
+            pygame.draw.circle(
+                self.effect_layer,
+                (255, 213, 128, int(145 * fade)),
+                center,
+                core_radius,
+            )
+            pygame.draw.circle(
+                self.effect_layer,
+                (255, 226, 155, int(220 * fade)),
+                center,
+                radius,
+                max(1, round(5 * fade)),
+            )
+            pygame.draw.circle(
+                self.effect_layer,
+                (233, 74, 42, int(95 * fade)),
+                center,
+                round(explosion.radius),
+                2,
+            )
+        surface.blit(self.effect_layer, (0, 0))
 
     @staticmethod
     def draw_wreck(
@@ -268,6 +339,7 @@ class Renderer:
     def render(self) -> None:
         self.draw_hud()
         board = self.board_background.copy()
+        self.draw_tracks(board)
         self.draw_aim_guide(board)
         self.draw_mines(board)
         for wreck in self.game.wrecks:
@@ -276,6 +348,7 @@ class Renderer:
             self.draw_tank(board, enemy)
         self.draw_tank(board, self.game.player)
         self.draw_bullets(board)
+        self.draw_explosions(board)
         self.draw_particles(board, self.game.particles)
         self.draw_reticle(board)
         self.draw_end_screen(board)

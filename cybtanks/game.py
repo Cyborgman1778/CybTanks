@@ -24,13 +24,14 @@ from .config import (
     PLAYER_STARTING_LIVES,
     PLAYER_SPEED,
     TILE,
+    TRACK_SPACING,
     WINDOW_SIZE,
 )
 from .enemy_ai import EnemyAISystem
 from .geometry import clamp
 from .levels import enemy_layout, map_layout
 from .mines import MineSystem
-from .models import Bullet, Mine, Particle, Tank, Vec2
+from .models import Bullet, ExplosionEffect, Mine, Particle, Tank, TrackMark, Vec2
 from .renderer import Renderer
 from .world import World, cell_center
 
@@ -53,6 +54,9 @@ class Game:
         self.bullets: list[Bullet]
         self.mines: list[Mine]
         self.particles: list[Particle]
+        self.explosions: list[ExplosionEffect]
+        self.track_marks: list[TrackMark]
+        self.track_progress: dict[int, float]
         self.wrecks: list[tuple[Vec2, float, tuple[int, int, int]]]
 
         self.enemy_catalog = load_enemy_catalog()
@@ -148,6 +152,9 @@ class Game:
         self.bullets = []
         self.mines = []
         self.particles = []
+        self.explosions = []
+        self.track_marks = []
+        self.track_progress = {}
         self.wrecks = []
         self.player = self.make_tank("player", 1, 1)
 
@@ -171,6 +178,9 @@ class Game:
         self.bullets = []
         self.mines = []
         self.particles = []
+        self.explosions = []
+        self.track_marks = []
+        self.track_progress = {}
         self.wrecks = [wreck for wreck in self.wrecks if wreck[2] != PLAYER_COLOR]
 
         for index, enemy in enumerate(self.enemies):
@@ -250,13 +260,38 @@ class Game:
         if aim.length_squared() > 0:
             self.player.turret_angle = math.atan2(aim.y, aim.x)
 
-    def destroy_tank(self, tank: Tank) -> None:
+    def destroy_tank(self, tank: Tank, play_destruction_sound: bool = True) -> None:
         if not tank.alive:
             return
         tank.alive = False
         self.wrecks.append((tank.position.copy(), tank.body_angle, tank.color))
         self.create_burst(tank.position, tank.color, 28, 145)
         self.create_burst(tank.position, (246, 224, 164), 12, 95)
+        if play_destruction_sound:
+            self.audio.play_tank_destroyed()
+
+    def create_explosion(self, position: Vec2, radius: float) -> None:
+        self.explosions.append(ExplosionEffect(position.copy(), radius))
+        self.audio.play_explosion()
+
+    def record_tank_tracks(self, starting_positions: dict[int, Vec2]) -> None:
+        for tank in self.all_tanks():
+            start = starting_positions.get(tank.tank_id)
+            if not tank.alive or start is None:
+                continue
+            movement = tank.position - start
+            distance = movement.length()
+            if distance <= 0.001:
+                continue
+
+            carried_distance = self.track_progress.get(tank.tank_id, 0.0)
+            next_mark = TRACK_SPACING - carried_distance
+            direction = movement / distance
+            angle = math.atan2(direction.y, direction.x)
+            while next_mark <= distance:
+                self.track_marks.append(TrackMark(start + direction * next_mark, angle))
+                next_mark += TRACK_SPACING
+            self.track_progress[tank.tank_id] = (carried_distance + distance) % TRACK_SPACING
 
     def create_burst(
         self,
@@ -287,6 +322,17 @@ class Game:
             particle.position += particle.velocity * dt
             particle.velocity *= drag
         self.particles = [particle for particle in self.particles if particle.life > 0]
+
+    def update_effects(self, dt: float) -> None:
+        for explosion in self.explosions:
+            explosion.age += dt
+        self.explosions = [
+            explosion for explosion in self.explosions if explosion.age < explosion.duration
+        ]
+
+        for track in self.track_marks:
+            track.age += dt
+        self.track_marks = [track for track in self.track_marks if track.age < track.lifetime]
 
     def evaluate_state(self) -> None:
         if self.state != "playing":
@@ -342,12 +388,17 @@ class Game:
             tank.shot_think_timer = max(0.0, tank.shot_think_timer - dt)
 
         if self.state == "playing":
+            starting_positions = {
+                tank.tank_id: tank.position.copy() for tank in self.all_tanks() if tank.alive
+            }
             self.update_player(dt)
             self.enemy_ai.update(dt)
+            self.record_tank_tracks(starting_positions)
             self.combat.update(dt)
             self.mine_system.update(dt)
             self.evaluate_state()
         self.update_particles(dt)
+        self.update_effects(dt)
 
     def render(self) -> None:
         self.renderer.render()

@@ -69,6 +69,7 @@ class CombatSystem:
         )
         tank.cooldown = FIRE_RATE_DELAYS[tank.fire_rate]
         self.game.create_burst(muzzle, tank.color, 4, 55)
+        self.game.audio.play_shot(tank.bullet_speed_class)
         return True
 
     def trace_shot(self, shooter: Tank, angle: float, target: Tank) -> ShotTrace:
@@ -137,6 +138,7 @@ class CombatSystem:
         if bullet.bounces >= bullet.max_bounces:
             bullet.alive = False
             self.game.create_burst(bullet.position, bullet.color, 7, 75)
+            self.game.audio.play_bullet_disintegrate()
             return False
         bullet.bounces += 1
         if axis == "x":
@@ -144,6 +146,7 @@ class CombatSystem:
         else:
             bullet.velocity.y *= -1
         self.game.create_burst(bullet.position, bullet.color, 5, 58)
+        self.game.audio.play_bullet_bounce()
         return True
 
     def break_close_player_bullet(self, bullet: Bullet, travelled: float) -> bool:
@@ -155,6 +158,7 @@ class CombatSystem:
             return False
         bullet.alive = False
         self.game.create_burst(bullet.position, bullet.color, 8, 78)
+        self.game.audio.play_bullet_disintegrate()
         return True
 
     def update(self, dt: float) -> None:
@@ -208,6 +212,7 @@ class CombatSystem:
                     second.alive = False
                     self.game.create_burst(impact, first.color, 5, 72)
                     self.game.create_burst(impact, second.color, 5, 72)
+                    self.game.audio.play_bullet_disintegrate()
                     break
 
             for bullet in self.game.bullets:
@@ -226,6 +231,7 @@ class CombatSystem:
                         continue
                     self.game.destroy_tank(tank)
                     bullet.alive = False
+                    self.game.audio.play_bullet_disintegrate()
                     break
 
         self.game.bullets = [bullet for bullet in self.game.bullets if bullet.alive]

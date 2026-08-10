@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 import pygame
 
-from .config import MAX_BOUNCES
+from .config import EXPLOSION_EFFECT_DURATION, MAX_BOUNCES, TRACK_LIFETIME
 
 
 Vec2 = pygame.Vector2
@@ -91,6 +91,22 @@ class Particle:
     size: float
     life: float
     max_life: float
+
+
+@dataclass
+class ExplosionEffect:
+    position: Vec2
+    radius: float
+    age: float = 0.0
+    duration: float = EXPLOSION_EFFECT_DURATION
+
+
+@dataclass
+class TrackMark:
+    position: Vec2
+    angle: float
+    age: float = 0.0
+    lifetime: float = TRACK_LIFETIME
 
 
 @dataclass

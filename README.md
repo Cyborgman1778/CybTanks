@@ -22,7 +22,7 @@ py main.py
 | `cybtanks/world.py` | Grid, paredes, movimiento, A* y superficies de rebote. |
 | `cybtanks/combat.py` | Disparos, rebotes y colisiones de balas y tanques. |
 | `cybtanks/mines.py` | Colocación, activación, explosión y daño de minas. |
-| `cybtanks/audio.py` | Generación y reproducción del pitido de advertencia. |
+| `cybtanks/audio.py` | Generación y reproducción de los efectos de sonido. |
 | `cybtanks/enemy_ai.py` | Movimiento, puntería y cálculo de rebotes enemigos. |
 | `cybtanks/renderer.py` | Carga de assets y dibujo de toda la interfaz. |
 | `cybtanks/game.py` | Niveles, eventos y coordinación de los sistemas. |
@@ -40,6 +40,10 @@ py main.py
 Los niveles rotan entre ocho escenarios. Para modificarlos, edita `data/map.txt` y `data/map_2.txt` a `data/map_8.txt` sin cambiar sus dimensiones. Los sprites SVG se pueden abrir en un editor de texto o en cualquier editor vectorial.
 
 El tile `3` representa un hoyo. Bloquea tanques, empujes, respawns y rutas A*, pero las balas, la visión y los cálculos de rebote pasan por encima sin colisionar.
+
+## Efectos Audiovisuales
+
+Los disparos lentos y rápidos tienen sonidos distintos, al igual que el rebote y la desintegración de sus proyectiles. Colocar una mina, producir una explosión y destruir un tanque también generan efectos diferenciados. Las explosiones muestran una onda sobre toda el área de daño, y los tanques móviles dejan huellas de oruga que se desvanecen durante cuatro segundos.
 
 ## Minas
 

@@ -44,6 +44,7 @@ class MineSystem:
             )
         )
         self.game.create_burst(tank.position, (116, 137, 121), 4, 25)
+        self.game.audio.play_mine_place()
         for enemy in self.game.enemies:
             enemy.plan_timer = 0
         return True
@@ -70,6 +71,7 @@ class MineSystem:
                 continue
             bullet.alive = False
             self.game.create_burst(bullet.position, bullet.color, 5, 55)
+            self.game.audio.play_bullet_disintegrate()
             self.explode(mine)
             return True
         return False
@@ -116,6 +118,7 @@ class MineSystem:
         if not mine.alive:
             return
         mine.alive = False
+        self.game.create_explosion(mine.position, MINE_EXPLOSION_RADIUS)
         chained_mines = [
             other
             for other in self.game.mines
@@ -130,7 +133,7 @@ class MineSystem:
 
         for tank in self.game.all_tanks():
             if tank.alive and tank.position.distance_to(mine.position) <= MINE_EXPLOSION_RADIUS:
-                self.game.destroy_tank(tank)
+                self.game.destroy_tank(tank, play_destruction_sound=False)
 
         if self.game.world.break_walls(mine.position, MINE_EXPLOSION_RADIUS):
             self.game.renderer.rebuild_board_background()
