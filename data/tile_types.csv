@@ -1,0 +1,5 @@
+valor,nombre,bloquea_tanques,bloquea_balas,rompible_por_mina,descripcion
+0,Suelo,false,false,false,Superficie transitable
+1,Muro sólido,true,true,false,Barrera permanente para tanques y balas
+2,Muro rompible,true,true,true,Solo una explosión de mina puede destruirlo
+3,Hoyo,true,false,false,Los tanques no pueden cruzarlo pero las balas pasan por encima

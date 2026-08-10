@@ -9,6 +9,12 @@ ASSET_DIR = BASE_DIR / "assets"
 DATA_DIR = BASE_DIR / "data"
 ENEMY_DATA_FILE = DATA_DIR / "enemies.csv"
 MAP_FILE = DATA_DIR / "map.txt"
+MAP_FILES = (
+    MAP_FILE,
+    DATA_DIR / "map_2.txt",
+    DATA_DIR / "map_3.txt",
+    DATA_DIR / "map_4.txt",
+)
 SPAWN_DATA_FILE = DATA_DIR / "spawns.csv"
 
 TILE = 60
@@ -66,6 +72,7 @@ ASSET_NAMES = (
     "floor_b",
     "wall",
     "wall_breakable",
+    "hole",
     "player_body",
     "player_turret",
     "light_gray_body",
@@ -84,17 +91,17 @@ ASSET_NAMES = (
 )
 
 
-def _load_map() -> tuple[tuple[int, ...], ...]:
+def _load_map(map_file: Path) -> tuple[tuple[int, ...], ...]:
     rows = []
-    for raw_line in MAP_FILE.read_text(encoding="utf-8").splitlines():
+    for raw_line in map_file.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-        if set(line) - {"0", "1", "2"}:
-            raise ValueError(f"Invalid character in {MAP_FILE}: {line!r}")
+        if set(line) - {"0", "1", "2", "3"}:
+            raise ValueError(f"Invalid character in {map_file}: {line!r}")
         rows.append(tuple(int(value) for value in line))
     if not rows or any(len(row) != len(rows[0]) for row in rows):
-        raise ValueError(f"Invalid map dimensions in {MAP_FILE}")
+        raise ValueError(f"Invalid map dimensions in {map_file}")
     return tuple(rows)
 
 
@@ -103,10 +110,18 @@ def _load_spawns() -> tuple[tuple[int, int], ...]:
         return tuple((int(row["col"]), int(row["row"])) for row in csv.DictReader(data_file))
 
 
-MAP = _load_map()
+MAP_LAYOUTS = tuple(_load_map(map_file) for map_file in MAP_FILES)
+MAP = MAP_LAYOUTS[0]
 ROWS = len(MAP)
 COLS = len(MAP[0])
+if any(len(layout) != ROWS or any(len(row) != COLS for row in layout) for layout in MAP_LAYOUTS):
+    raise ValueError("All map layouts must have the same dimensions")
 BOARD_WIDTH = COLS * TILE
 BOARD_HEIGHT = ROWS * TILE
 WINDOW_SIZE = (BOARD_WIDTH, BOARD_HEIGHT + HUD_HEIGHT)
 ENEMY_SPAWNS = _load_spawns()
+
+for map_file, layout in zip(MAP_FILES, MAP_LAYOUTS):
+    for col, row in ENEMY_SPAWNS:
+        if not 0 <= col < COLS or not 0 <= row < ROWS or layout[row][col] != 0:
+            raise ValueError(f"Invalid enemy spawn ({col}, {row}) in {map_file}")

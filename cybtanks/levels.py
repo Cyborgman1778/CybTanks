@@ -2,8 +2,15 @@ from __future__ import annotations
 
 import random
 
-from .config import ENEMY_SPAWNS
+from .config import ENEMY_SPAWNS, MAP_LAYOUTS
 from .models import GridCell
+
+
+def map_layout(level: int) -> tuple[tuple[int, ...], ...]:
+    """Select a map deterministically and cycle layouts for unlimited levels."""
+    if level < 1:
+        raise ValueError("Level numbers start at 1")
+    return MAP_LAYOUTS[(level - 1) % len(MAP_LAYOUTS)]
 
 
 def enemy_layout(level: int) -> list[tuple[str, GridCell]]:

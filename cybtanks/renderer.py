@@ -63,6 +63,8 @@ class Renderer:
                     surface.blit(self.assets[floor_name], position)
                 elif tile == 2:
                     surface.blit(self.assets["wall_breakable"], position)
+                elif tile == 3:
+                    surface.blit(self.assets["hole"], position)
                 else:
                     surface.blit(self.assets["wall"], position)
         return surface

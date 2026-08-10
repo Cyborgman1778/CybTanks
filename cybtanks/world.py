@@ -28,17 +28,27 @@ def is_wall(cell: GridCell) -> bool:
 
 class World:
     def __init__(self) -> None:
+        self.layout = MAP
         self.tiles: list[list[int]] = []
         self.bounce_surfaces: list[tuple[str, float, float, float]] = []
         self.reset()
 
-    def reset(self) -> None:
-        self.tiles = [list(row) for row in MAP]
+    def reset(self, layout: tuple[tuple[int, ...], ...] | None = None) -> None:
+        if layout is not None:
+            self.layout = layout
+        self.tiles = [list(row) for row in self.layout]
         self.bounce_surfaces = self._build_bounce_surfaces()
 
     def is_wall(self, cell: GridCell) -> bool:
+        return self.blocks_tank(cell)
+
+    def blocks_tank(self, cell: GridCell) -> bool:
         col, row = cell
         return col < 0 or col >= COLS or row < 0 or row >= ROWS or self.tiles[row][col] != 0
+
+    def blocks_bullet(self, cell: GridCell) -> bool:
+        col, row = cell
+        return col < 0 or col >= COLS or row < 0 or row >= ROWS or self.tiles[row][col] in (1, 2)
 
     def tank_touches_wall(self, position: Vec2, half: float = TANK_HALF) -> bool:
         min_col = math.floor((position.x - half) / TILE)
@@ -48,7 +58,7 @@ class World:
 
         for row in range(min_row, max_row + 1):
             for col in range(min_col, max_col + 1):
-                if not self.is_wall((col, row)):
+                if not self.blocks_tank((col, row)):
                     continue
                 left = col * TILE
                 top = row * TILE
@@ -127,7 +137,7 @@ class World:
 
         for row in range(min_row, max_row + 1):
             for col in range(min_col, max_col + 1):
-                if not self.is_wall((col, row)):
+                if not self.blocks_bullet((col, row)):
                     continue
                 nearest_x = clamp(position.x, col * TILE, (col + 1) * TILE)
                 nearest_y = clamp(position.y, row * TILE, (row + 1) * TILE)
@@ -192,7 +202,7 @@ class World:
 
         for row in range(min_row, max_row + 1):
             for col in range(min_col, max_col + 1):
-                if self.tiles[row][col] == 0:
+                if self.tiles[row][col] not in (1, 2):
                     continue
                 wall = pygame.Rect(col * TILE, row * TILE, TILE, TILE)
                 wall.inflate_ip(math.ceil(margin * 2), math.ceil(margin * 2))
@@ -204,19 +214,19 @@ class World:
         surfaces = []
         for row in range(ROWS):
             for col in range(COLS):
-                if self.tiles[row][col] == 0:
+                if self.tiles[row][col] not in (1, 2):
                     continue
                 top = row * TILE
                 bottom = (row + 1) * TILE
                 left = col * TILE
                 right = (col + 1) * TILE
-                if not self.is_wall((col - 1, row)):
+                if not self.blocks_bullet((col - 1, row)):
                     surfaces.append(("x", left - BULLET_RADIUS, top, bottom))
-                if not self.is_wall((col + 1, row)):
+                if not self.blocks_bullet((col + 1, row)):
                     surfaces.append(("x", right + BULLET_RADIUS, top, bottom))
-                if not self.is_wall((col, row - 1)):
+                if not self.blocks_bullet((col, row - 1)):
                     surfaces.append(("y", top - BULLET_RADIUS, left, right))
-                if not self.is_wall((col, row + 1)):
+                if not self.blocks_bullet((col, row + 1)):
                     surfaces.append(("y", bottom + BULLET_RADIUS, left, right))
         return surfaces
 

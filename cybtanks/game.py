@@ -28,7 +28,7 @@ from .config import (
 )
 from .enemy_ai import EnemyAISystem
 from .geometry import clamp
-from .levels import enemy_layout
+from .levels import enemy_layout, map_layout
 from .mines import MineSystem
 from .models import Bullet, Mine, Particle, Tank, Vec2
 from .renderer import Renderer
@@ -143,7 +143,7 @@ class Game:
         self.state = "playing"
         if reset_lives:
             self.lives = PLAYER_STARTING_LIVES
-        self.world.reset()
+        self.world.reset(map_layout(self.level))
         self.renderer.rebuild_board_background()
         self.bullets = []
         self.mines = []

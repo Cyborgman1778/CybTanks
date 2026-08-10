@@ -28,7 +28,8 @@ py main.py
 | `cybtanks/game.py` | Niveles, eventos y coordinación de los sistemas. |
 | `data/enemies.csv` | Cualidades editables de cada tipo de enemigo. |
 | `data/tank_attribute_options.csv` | Opciones válidas y explicación de cada cualidad. |
-| `data/map.txt` | Mapa: `0` es suelo, `1` pared sólida y `2` pared rompible. |
+| `data/map*.txt` | Mapas: `0` suelo, `1` pared sólida, `2` pared rompible y `3` hoyo. |
+| `data/tile_types.csv` | Colisiones y propiedades de cada tipo de tile. |
 | `data/spawns.csv` | Puntos de aparición de enemigos. |
 | `assets/*.svg` | Sprites editables por separado. |
 
@@ -36,7 +37,9 @@ py main.py
 
 `data/enemies.csv` utiliza encabezados descriptivos en español. Las velocidades y cadencias disponibles están en `cybtanks/config.py`, y `data/tank_attribute_options.csv` resume sus valores, unidades y formatos permitidos.
 
-Para modificar el escenario, edita `data/map.txt` sin cambiar la longitud de sus filas. Los sprites SVG se pueden abrir en un editor de texto o en cualquier editor vectorial.
+Los niveles rotan entre cuatro escenarios. Para modificarlos, edita `data/map.txt` y `data/map_2.txt` a `data/map_4.txt` sin cambiar sus dimensiones. Los sprites SVG se pueden abrir en un editor de texto o en cualquier editor vectorial.
+
+El tile `3` representa un hoyo. Bloquea tanques, empujes, respawns y rutas A*, pero las balas, la visión y los cálculos de rebote pasan por encima sin colisionar.
 
 ## Minas
 
