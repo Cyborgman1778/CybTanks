@@ -35,12 +35,18 @@ class Tank:
     velocity: Vec2 = field(default_factory=Vec2)
     cooldown: float = 0.0
     fire_timer: float = 0.0
+    mine_timer: float = 0.0
     plan_timer: float = 0.0
     path: list[GridCell] = field(default_factory=list)
     goal: GridCell | None = None
     aim_angle: float | None = None
     aim_timer: float = 0.0
     shot_ready: bool = False
+    escaping_mines: bool = False
+    stuck_timer: float = 0.0
+    avoid_cell: GridCell | None = None
+    avoid_timer: float = 0.0
+    route_variant: int = 0
 
 
 @dataclass

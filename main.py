@@ -1,4 +1,4 @@
-from ricochet.game import Game
+from cybtanks.game import Game
 
 
 if __name__ == "__main__":

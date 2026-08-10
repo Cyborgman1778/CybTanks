@@ -1,5 +1,5 @@
 cualidad,tipo_de_dato,opciones_validas,unidad_o_formato,descripcion
-tipo_id,texto,Identificador único,texto sin espacios,Nombre interno usado por el código
+tipo_id,opcion,"light_gray; dark_gray; yellow",texto sin espacios,Identificador interno de los tipos disponibles
 nombre_visible,texto,Texto libre,texto,Nombre mostrado para el tanque
 color_hex,texto,Valores hexadecimales,#RRGGBB,Color principal del tanque
 velocidad_movimiento,opcion,"stopped=0; slow=58; medium=125; fast=180",píxeles por segundo,Velocidad de desplazamiento

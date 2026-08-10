@@ -25,6 +25,7 @@ MINE_TRIGGER_RADIUS = 25.0
 MINE_EXPLOSION_RADIUS = TILE * 1.5
 MINE_BEEP_INTERVAL = 0.18
 MINE_MIN_SEPARATION = 30.0
+MINE_ESCAPE_MARGIN = 12.0
 
 MOVEMENT_SPEEDS = {
     "stopped": 0.0,
@@ -64,6 +65,8 @@ ASSET_NAMES = (
     "light_gray_turret",
     "dark_gray_body",
     "dark_gray_turret",
+    "yellow_body",
+    "yellow_turret",
     "bullet_player",
     "bullet_enemy",
     "mine",

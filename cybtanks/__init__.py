@@ -1,0 +1,1 @@
+"""CybTanks game package."""

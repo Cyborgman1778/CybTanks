@@ -44,6 +44,8 @@ class MineSystem:
             )
         )
         self.game.create_burst(tank.position, (116, 137, 121), 4, 25)
+        for enemy in self.game.enemies:
+            enemy.plan_timer = 0
         return True
 
     def trigger(self, mine: Mine) -> None:
@@ -132,6 +134,6 @@ class MineSystem:
 
         if self.game.world.break_walls(mine.position, MINE_EXPLOSION_RADIUS):
             self.game.renderer.rebuild_board_background()
-            for enemy in self.game.enemies:
-                enemy.plan_timer = 0
-                enemy.aim_timer = 0
+        for enemy in self.game.enemies:
+            enemy.plan_timer = 0
+            enemy.aim_timer = 0

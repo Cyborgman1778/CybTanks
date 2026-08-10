@@ -98,15 +98,23 @@ class World:
                     return True
         return False
 
-    def find_path(self, start: GridCell, goal: GridCell) -> list[GridCell] | None:
-        if self.is_wall(start) or self.is_wall(goal):
+    def find_path(
+        self,
+        start: GridCell,
+        goal: GridCell,
+        blocked: set[GridCell] | None = None,
+        penalties: dict[GridCell, float] | None = None,
+    ) -> list[GridCell] | None:
+        blocked = blocked or set()
+        penalties = penalties or {}
+        if self.is_wall(start) or self.is_wall(goal) or goal in blocked:
             return None
         if start == goal:
             return []
 
-        frontier: list[tuple[int, int, GridCell]] = [(0, 0, start)]
+        frontier: list[tuple[float, float, GridCell]] = [(0, 0, start)]
         came_from: dict[GridCell, GridCell] = {}
-        cost_so_far: dict[GridCell, int] = {start: 0}
+        cost_so_far: dict[GridCell, float] = {start: 0}
 
         while frontier:
             _, current_cost, current = heapq.heappop(frontier)
@@ -117,10 +125,10 @@ class World:
 
             col, row = current
             for neighbour in ((col + 1, row), (col - 1, row), (col, row + 1), (col, row - 1)):
-                if self.is_wall(neighbour):
+                if self.is_wall(neighbour) or neighbour in blocked:
                     continue
-                new_cost = current_cost + 1
-                if new_cost >= cost_so_far.get(neighbour, 1_000_000):
+                new_cost = current_cost + 1 + penalties.get(neighbour, 0.0)
+                if new_cost >= cost_so_far.get(neighbour, math.inf):
                     continue
                 cost_so_far[neighbour] = new_cost
                 priority = new_cost + abs(goal[0] - neighbour[0]) + abs(goal[1] - neighbour[1])

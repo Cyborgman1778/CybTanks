@@ -13,6 +13,7 @@ from .config import (
 )
 from .geometry import clamp, segment_distance_squared
 from .models import Bullet, ShotTrace, Tank, Vec2
+from .world import cell_center
 
 if TYPE_CHECKING:
     from .game import Game
@@ -98,7 +99,13 @@ class CombatSystem:
                 trace.self_hit = True
 
             for ally in self.game.enemies:
-                if ally.alive and ally.tank_id != shooter.tank_id and self.circle_touches_tank(position, ally):
+                if not ally.alive or ally.tank_id == shooter.tank_id:
+                    continue
+                future_collision = any(
+                    position.distance_to(cell_center(cell)) <= TANK_HALF + BULLET_RADIUS
+                    for cell in ally.path[:3]
+                )
+                if self.circle_touches_tank(position, ally) or future_collision:
                     trace.ally_hit = True
                     break
 

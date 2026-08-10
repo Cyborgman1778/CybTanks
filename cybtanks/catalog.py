@@ -16,7 +16,7 @@ def parse_hex_color(value: str) -> tuple[int, int, int]:
 def load_enemy_catalog() -> dict[str, dict[str, str]]:
     with ENEMY_DATA_FILE.open(encoding="utf-8", newline="") as data_file:
         catalog = {row["tipo_id"]: row for row in csv.DictReader(data_file)}
-    required = {"light_gray", "dark_gray"}
+    required = {"light_gray", "dark_gray", "yellow"}
     if not required.issubset(catalog):
         raise ValueError(f"Missing enemy definitions in {ENEMY_DATA_FILE}")
     for enemy_id, config in catalog.items():

@@ -1,1 +1,0 @@
-"""Ricochet Grid game package."""

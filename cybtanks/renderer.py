@@ -188,10 +188,10 @@ class Renderer:
     def draw_hud(self) -> None:
         screen = self.game.screen
         screen.fill(BACKGROUND)
-        rico = self.title_font.render("RICO", True, CREAM)
-        chet = self.title_font.render("CHET", True, PLAYER_COLOR)
-        screen.blit(rico, (20, 7))
-        screen.blit(chet, (20 + rico.get_width(), 7))
+        cyb = self.title_font.render("CYB", True, CREAM)
+        tanks = self.title_font.render("TANKS", True, PLAYER_COLOR)
+        screen.blit(cyb, (20, 7))
+        screen.blit(tanks, (20 + cyb.get_width(), 7))
         subtitle = self.small_font.render("SIMULADOR TACTICO // GRID 07", True, MUTED)
         screen.blit(subtitle, (22, 57))
 

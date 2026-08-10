@@ -37,7 +37,7 @@ class Game:
     def __init__(self) -> None:
         pygame.mixer.pre_init(22_050, -16, 1, 256)
         pygame.init()
-        pygame.display.set_caption("Ricochet Grid - Tanks")
+        pygame.display.set_caption("CybTanks")
         self.screen = pygame.display.set_mode(WINDOW_SIZE)
         self.clock = pygame.time.Clock()
         self.running = True
@@ -116,6 +116,7 @@ class Game:
             ricochet_success_rate=ricochet_success_rate,
             self_safe=self_safe,
             fire_timer=1.0 + index * 0.28,
+            mine_timer=1.4 + index * 0.25,
             plan_timer=index * 0.18,
         )
         self.next_tank_id += 1
