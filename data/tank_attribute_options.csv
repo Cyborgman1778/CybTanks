@@ -9,6 +9,7 @@ rebotes_bala,entero,0 o mayor,rebotes,Cantidad máxima de rebotes por proyectil
 maximo_minas,entero,0 o mayor,minas activas,Número máximo de minas simultáneas en el tablero
 vidas,entero,0 o mayor,vidas disponibles,Número de intentos del jugador antes de reiniciar el nivel
 cadencia_disparo,opcion,"slow=0.75; normal=0.38; fast=0.16",segundos,Tiempo mínimo entre disparos
+tiempo_pensar_disparo,opcion,"slow=0.90; medium=0.50; fast=0.15",segundos,Espera desde que desaparece una bala propia hasta poder volver a disparar
 nivel_inteligencia,opcion,"player; medium; medium_low",categoría,Nivel general de inteligencia
 calculo_rebote,opcion,"manual; accurate; imperfect",categoría,Forma de calcular disparos con rebote
 probabilidad_acierto_rebote,decimal,0.0 a 1.0,proporción,Probabilidad de que el cálculo de rebote sea correcto

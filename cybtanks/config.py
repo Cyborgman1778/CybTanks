@@ -43,9 +43,15 @@ FIRE_RATE_DELAYS = {
     "normal": 0.38,
     "fast": 0.16,
 }
+SHOT_THINK_DELAYS = {
+    "slow": 0.9,
+    "medium": 0.5,
+    "fast": 0.15,
+}
 PLAYER_SPEED = MOVEMENT_SPEEDS["medium"]
 PLAYER_BULLET_SPEED = BULLET_SPEEDS["slow"]
 PLAYER_FIRE_RATE = "fast"
+PLAYER_SHOT_THINK_SPEED = "fast"
 PLAYER_MIN_RICOCHET_DISTANCE = 24.0
 
 BACKGROUND = (10, 15, 11)

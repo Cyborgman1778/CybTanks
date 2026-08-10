@@ -73,14 +73,51 @@ class World:
 
     def move_tank(self, tank: Tank, movement: Vec2, tanks: list[Tank]) -> Vec2:
         original = tank.position.copy()
-        next_position = Vec2(tank.position.x + movement.x, tank.position.y)
-        if not self.tank_touches_wall(next_position) and not self.tank_touches_tank(tank, next_position, tanks):
-            tank.position.x = next_position.x
-
-        next_position = Vec2(tank.position.x, tank.position.y + movement.y)
-        if not self.tank_touches_wall(next_position) and not self.tank_touches_tank(tank, next_position, tanks):
-            tank.position.y = next_position.y
+        for axis, amount in (("x", movement.x), ("y", movement.y)):
+            if abs(amount) <= 0.000_001:
+                continue
+            snapshots = {
+                other.tank_id: other.position.copy()
+                for other in tanks
+                if other.alive
+            }
+            if self._push_axis(tank, amount, axis, tanks, set()):
+                continue
+            for other in tanks:
+                if other.alive and other.tank_id in snapshots:
+                    other.position.update(snapshots[other.tank_id])
         return tank.position - original
+
+    def _push_axis(
+        self,
+        tank: Tank,
+        amount: float,
+        axis: str,
+        tanks: list[Tank],
+        chain: set[int],
+    ) -> bool:
+        if tank.tank_id in chain:
+            return False
+        next_chain = chain | {tank.tank_id}
+        candidate = tank.position.copy()
+        setattr(candidate, axis, getattr(candidate, axis) + amount)
+        if self.tank_touches_wall(candidate):
+            return False
+
+        while True:
+            colliders = [
+                other
+                for other in tanks
+                if other.alive
+                and other.tank_id != tank.tank_id
+                and candidate.distance_squared_to(other.position) < (TANK_HALF * 2) ** 2
+            ]
+            if not colliders:
+                break
+            if not self._push_axis(colliders[0], amount, axis, tanks, next_chain):
+                return False
+        tank.position.update(candidate)
+        return True
 
     def circle_touches_wall(self, position: Vec2, radius: float = BULLET_RADIUS) -> bool:
         min_col = math.floor((position.x - radius) / TILE)

@@ -57,8 +57,16 @@ Cada tanque móvil recibe una semilla de ruta distinta al comenzar y recuerda la
 
 ## Vidas
 
-El jugador comienza cada nivel con tres vidas. Al perder una vida reaparece en la celda segura más cercana, se limpian balas y minas, y los enemigos que ya fueron destruidos permanecen destruidos. Los enemigos supervivientes conservan su estado, pero recalculan sus rutas con semillas nuevas.
+El jugador comienza cada nivel con tres vidas. Al perder una vida se limpian balas y minas, el mapa recupera todos sus muros y los enemigos supervivientes regresan a sus puntos de aparición. Los enemigos que ya fueron destruidos permanecen destruidos. Después el jugador reaparece en la celda segura más cercana.
 
 Cuando se agotan las tres vidas se reinicia el nivel completo y regresan todos sus enemigos.
+
+## Empuje Entre Tanques
+
+El movimiento vuelve a responder inmediatamente a los controles, sin inercia ni fricción. Cuando un tanque avanza contra otro intenta empujarlo, y el empuje puede propagarse por una cadena de varios tanques. Si el último queda bloqueado por una pared, ninguno de los tanques de la cadena se desplaza.
+
+## Pensamiento De Disparo
+
+`tiempo_pensar_disparo` en `data/enemies.csv` es distinto de `cadencia_disparo`. Cuando desaparece una bala propia, el tanque debe esperar este nuevo tiempo antes de poder disparar otra: `slow=0.90`, `medium=0.50` y `fast=0.15` segundos. El jugador usa rápido, los grises lento y el amarillo medio.
 
 Las balas del jugador necesitan recorrer una distancia mínima antes de poder rebotar. Si se dispara directamente contra una pared estando pegado a ella, el proyectil se rompe en vez de rebotar. La distancia se configura con `PLAYER_MIN_RICOCHET_DISTANCE` en `cybtanks/config.py`.

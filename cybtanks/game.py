@@ -21,6 +21,7 @@ from .config import (
     PLAYER_BULLET_SPEED,
     PLAYER_COLOR,
     PLAYER_FIRE_RATE,
+    PLAYER_SHOT_THINK_SPEED,
     PLAYER_SPEED,
     TILE,
     WINDOW_SIZE,
@@ -80,6 +81,7 @@ class Game:
             max_bounces = MAX_BOUNCES
             max_mines = MAX_PLAYER_MINES
             fire_rate = PLAYER_FIRE_RATE
+            shot_think_speed = PLAYER_SHOT_THINK_SPEED
             intelligence = "player"
             ricochet_accuracy = "manual"
             ricochet_success_rate = 1.0
@@ -93,6 +95,7 @@ class Game:
             max_bounces = int(config["rebotes_bala"])
             max_mines = int(config["maximo_minas"])
             fire_rate = config["cadencia_disparo"]
+            shot_think_speed = config["tiempo_pensar_disparo"]
             intelligence = config["nivel_inteligencia"]
             ricochet_accuracy = config["calculo_rebote"]
             ricochet_success_rate = float(config["probabilidad_acierto_rebote"])
@@ -102,6 +105,7 @@ class Game:
             tank_id=self.next_tank_id,
             team=team,
             kind=kind,
+            spawn_cell=(col, row),
             position=cell_center((col, row)),
             body_angle=0.0 if is_player else math.pi,
             turret_angle=0.0 if is_player else math.pi,
@@ -112,6 +116,7 @@ class Game:
             max_bounces=max_bounces,
             max_mines=max_mines,
             fire_rate=fire_rate,
+            shot_think_speed=shot_think_speed,
             intelligence=intelligence,
             ricochet_accuracy=ricochet_accuracy,
             ricochet_success_rate=ricochet_success_rate,
@@ -154,26 +159,39 @@ class Game:
     def respawn_player(self) -> None:
         if self.lives <= 0:
             return
+        self.world.reset()
+        self.renderer.rebuild_board_background()
         self.bullets = []
         self.mines = []
         self.particles = []
         self.wrecks = [wreck for wreck in self.wrecks if wreck[2] != PLAYER_COLOR]
 
-        self.player = self.make_tank("player", 1, 1)
-        self.player.position = cell_center(self.safe_respawn_cell())
-        for enemy in self.enemies:
+        for index, enemy in enumerate(self.enemies):
             if not enemy.alive:
                 continue
+            enemy.position = cell_center(enemy.spawn_cell)
+            enemy.body_angle = math.pi
+            enemy.turret_angle = math.pi
+            enemy.velocity.update(0, 0)
+            enemy.cooldown = 0
+            enemy.shot_think_timer = 0
+            enemy.fire_timer = 1.0 + index * 0.28
+            enemy.mine_timer = 1.4 + index * 0.25
             enemy.path = []
             enemy.goal = None
             enemy.plan_timer = 0
             enemy.aim_timer = 0
+            enemy.shot_ready = False
             enemy.stuck_timer = 0
             enemy.avoid_cell = None
             enemy.avoid_timer = 0
+            enemy.escaping_mines = False
             enemy.route_variant += 1
             enemy.route_seed = random.getrandbits(31)
             enemy.recent_cells.clear()
+
+        self.player = self.make_tank("player", 1, 1)
+        self.player.position = cell_center(self.safe_respawn_cell())
         self.state = "playing"
 
     def safe_respawn_cell(self) -> tuple[int, int]:
@@ -314,6 +332,7 @@ class Game:
         self.update_mouse(pygame.mouse.get_pos())
         for tank in self.all_tanks():
             tank.cooldown = max(0.0, tank.cooldown - dt)
+            tank.shot_think_timer = max(0.0, tank.shot_think_timer - dt)
 
         if self.state == "playing":
             self.update_player(dt)

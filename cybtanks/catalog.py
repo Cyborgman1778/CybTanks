@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import csv
 
-from .config import BULLET_SPEEDS, ENEMY_DATA_FILE, FIRE_RATE_DELAYS, MOVEMENT_SPEEDS
+from .config import (
+    BULLET_SPEEDS,
+    ENEMY_DATA_FILE,
+    FIRE_RATE_DELAYS,
+    MOVEMENT_SPEEDS,
+    SHOT_THINK_DELAYS,
+)
 
 
 def parse_hex_color(value: str) -> tuple[int, int, int]:
@@ -26,6 +32,8 @@ def load_enemy_catalog() -> dict[str, dict[str, str]]:
             raise ValueError(f"Invalid bullet speed for {enemy_id}")
         if config["cadencia_disparo"] not in FIRE_RATE_DELAYS:
             raise ValueError(f"Invalid fire rate for {enemy_id}")
+        if config["tiempo_pensar_disparo"] not in SHOT_THINK_DELAYS:
+            raise ValueError(f"Invalid shot thinking speed for {enemy_id}")
         if int(config["maximo_minas"]) < 0:
             raise ValueError(f"Invalid mine limit for {enemy_id}")
         if not 0.0 <= float(config["probabilidad_acierto_rebote"]) <= 1.0:

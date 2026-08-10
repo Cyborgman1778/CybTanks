@@ -17,6 +17,7 @@ class Tank:
     tank_id: int
     team: str
     kind: str
+    spawn_cell: GridCell
     position: Vec2
     body_angle: float
     turret_angle: float
@@ -27,6 +28,7 @@ class Tank:
     max_bounces: int
     max_mines: int
     fire_rate: str
+    shot_think_speed: str
     intelligence: str
     ricochet_accuracy: str
     ricochet_success_rate: float
@@ -36,6 +38,7 @@ class Tank:
     cooldown: float = 0.0
     fire_timer: float = 0.0
     mine_timer: float = 0.0
+    shot_think_timer: float = 0.0
     plan_timer: float = 0.0
     path: list[GridCell] = field(default_factory=list)
     goal: GridCell | None = None

@@ -9,6 +9,7 @@ from .config import (
     BULLET_RADIUS,
     FIRE_RATE_DELAYS,
     PLAYER_MIN_RICOCHET_DISTANCE,
+    SHOT_THINK_DELAYS,
     TANK_HALF,
 )
 from .geometry import clamp, segment_distance_squared
@@ -44,7 +45,12 @@ class CombatSystem:
         return result
 
     def shoot(self, tank: Tank) -> bool:
-        if not tank.alive or tank.cooldown > 0 or self.game.state != "playing":
+        if (
+            not tank.alive
+            or tank.cooldown > 0
+            or tank.shot_think_timer > 0
+            or self.game.state != "playing"
+        ):
             return False
         if self.active_bullets(tank) >= tank.max_bullets:
             return False
@@ -151,6 +157,10 @@ class CombatSystem:
         return True
 
     def update(self, dt: float) -> None:
+        bullets_before: dict[int, int] = {}
+        for bullet in self.game.bullets:
+            if bullet.alive:
+                bullets_before[bullet.owner_id] = bullets_before.get(bullet.owner_id, 0) + 1
         tanks = self.game.all_tanks()
         maximum_speed = max(
             (bullet.velocity.length() for bullet in self.game.bullets if bullet.alive),
@@ -218,3 +228,15 @@ class CombatSystem:
                     break
 
         self.game.bullets = [bullet for bullet in self.game.bullets if bullet.alive]
+        bullets_after: dict[int, int] = {}
+        for bullet in self.game.bullets:
+            bullets_after[bullet.owner_id] = bullets_after.get(bullet.owner_id, 0) + 1
+        tanks_by_id = {tank.tank_id: tank for tank in tanks}
+        for owner_id, previous_count in bullets_before.items():
+            if bullets_after.get(owner_id, 0) >= previous_count or owner_id not in tanks_by_id:
+                continue
+            tank = tanks_by_id[owner_id]
+            tank.shot_think_timer = max(
+                tank.shot_think_timer,
+                SHOT_THINK_DELAYS[tank.shot_think_speed],
+            )
