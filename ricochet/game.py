@@ -85,17 +85,17 @@ class Game:
             self_safe = False
         else:
             config = self.enemy_catalog[kind]
-            speed = MOVEMENT_SPEEDS[config["movement_speed"]]
-            color = parse_hex_color(config["color"])
-            bullet_speed = BULLET_SPEEDS[config["bullet_speed"]]
-            max_bullets = int(config["max_bullets"])
-            max_bounces = int(config["bounces"])
-            max_mines = int(config["max_mines"])
-            fire_rate = config["fire_rate"]
-            intelligence = config["intelligence"]
-            ricochet_accuracy = config["ricochet_accuracy"]
-            ricochet_success_rate = float(config["ricochet_success_rate"])
-            self_safe = config["self_safe"].lower() == "true"
+            speed = MOVEMENT_SPEEDS[config["velocidad_movimiento"]]
+            color = parse_hex_color(config["color_hex"])
+            bullet_speed = BULLET_SPEEDS[config["velocidad_bala"]]
+            max_bullets = int(config["maximo_balas"])
+            max_bounces = int(config["rebotes_bala"])
+            max_mines = int(config["maximo_minas"])
+            fire_rate = config["cadencia_disparo"]
+            intelligence = config["nivel_inteligencia"]
+            ricochet_accuracy = config["calculo_rebote"]
+            ricochet_success_rate = float(config["probabilidad_acierto_rebote"])
+            self_safe = config["evita_autodestruccion"].lower() == "true"
 
         tank = Tank(
             tank_id=self.next_tank_id,

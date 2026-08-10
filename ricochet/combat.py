@@ -3,7 +3,14 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
-from .config import BOARD_HEIGHT, BOARD_WIDTH, BULLET_RADIUS, FIRE_RATE_DELAYS, TANK_HALF
+from .config import (
+    BOARD_HEIGHT,
+    BOARD_WIDTH,
+    BULLET_RADIUS,
+    FIRE_RATE_DELAYS,
+    PLAYER_MIN_RICOCHET_DISTANCE,
+    TANK_HALF,
+)
 from .geometry import clamp, segment_distance_squared
 from .models import Bullet, ShotTrace, Tank, Vec2
 
@@ -125,6 +132,17 @@ class CombatSystem:
         self.game.create_burst(bullet.position, bullet.color, 5, 58)
         return True
 
+    def break_close_player_bullet(self, bullet: Bullet, travelled: float) -> bool:
+        if (
+            bullet.team != "player"
+            or bullet.bounces > 0
+            or travelled >= PLAYER_MIN_RICOCHET_DISTANCE
+        ):
+            return False
+        bullet.alive = False
+        self.game.create_burst(bullet.position, bullet.color, 8, 78)
+        return True
+
     def update(self, dt: float) -> None:
         tanks = self.game.all_tanks()
         maximum_speed = max(
@@ -139,9 +157,12 @@ class CombatSystem:
                 if not bullet.alive:
                     continue
                 bullet.age += step_time
+                substep_start = bullet.position.copy()
 
                 next_x = Vec2(bullet.position.x + bullet.velocity.x * step_time, bullet.position.y)
                 if self.game.world.circle_touches_wall(next_x):
+                    if self.break_close_player_bullet(bullet, bullet.distance_travelled):
+                        continue
                     if not self.reflect_bullet(bullet, "x"):
                         continue
                 else:
@@ -149,10 +170,14 @@ class CombatSystem:
 
                 next_y = Vec2(bullet.position.x, bullet.position.y + bullet.velocity.y * step_time)
                 if self.game.world.circle_touches_wall(next_y):
+                    travelled = bullet.distance_travelled + substep_start.distance_to(bullet.position)
+                    if self.break_close_player_bullet(bullet, travelled):
+                        continue
                     if not self.reflect_bullet(bullet, "y"):
                         continue
                 else:
                     bullet.position.y = next_y.y
+                bullet.distance_travelled += substep_start.distance_to(bullet.position)
 
             for first_index, first in enumerate(self.game.bullets):
                 if not first.alive:

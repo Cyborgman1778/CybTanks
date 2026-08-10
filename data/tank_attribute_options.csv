@@ -1,0 +1,15 @@
+cualidad,tipo_de_dato,opciones_validas,unidad_o_formato,descripcion
+tipo_id,texto,Identificador único,texto sin espacios,Nombre interno usado por el código
+nombre_visible,texto,Texto libre,texto,Nombre mostrado para el tanque
+color_hex,texto,Valores hexadecimales,#RRGGBB,Color principal del tanque
+velocidad_movimiento,opcion,"stopped=0; slow=58; medium=125; fast=180",píxeles por segundo,Velocidad de desplazamiento
+velocidad_bala,opcion,"slow=230; fast=400",píxeles por segundo,Velocidad de los proyectiles
+maximo_balas,entero,0 o mayor,balas activas,Número máximo de balas simultáneas en el tablero
+rebotes_bala,entero,0 o mayor,rebotes,Cantidad máxima de rebotes por proyectil
+maximo_minas,entero,0 o mayor,minas activas,Número máximo de minas simultáneas en el tablero
+cadencia_disparo,opcion,"slow=0.75; normal=0.38; fast=0.16",segundos,Tiempo mínimo entre disparos
+nivel_inteligencia,opcion,"player; medium; medium_low",categoría,Nivel general de inteligencia
+calculo_rebote,opcion,"manual; accurate; imperfect",categoría,Forma de calcular disparos con rebote
+probabilidad_acierto_rebote,decimal,0.0 a 1.0,proporción,Probabilidad de que el cálculo de rebote sea correcto
+evita_autodestruccion,booleano,"true; false",booleano,Indica si la IA descarta trayectorias suicidas
+descripcion,texto,Texto libre,texto,Resumen legible del comportamiento

@@ -1,3 +1,3 @@
-id,display_name,color,movement_speed,bullet_speed,max_bullets,bounces,max_mines,fire_rate,intelligence,ricochet_accuracy,ricochet_success_rate,self_safe,description
+tipo_id,nombre_visible,color_hex,velocidad_movimiento,velocidad_bala,maximo_balas,rebotes_bala,maximo_minas,cadencia_disparo,nivel_inteligencia,calculo_rebote,probabilidad_acierto_rebote,evita_autodestruccion,descripcion
 light_gray,Gris claro,#CACFCA,stopped,slow,1,1,0,slow,medium,accurate,1.0,true,"No se mueve; 0 minas; cadencia lenta; calcula rebotes seguros y precisos"
 dark_gray,Gris oscuro,#5B635D,slow,slow,1,1,0,slow,medium_low,imperfect,0.58,true,"Se mueve lento; 0 minas; cadencia lenta; sus rebotes son seguros pero a veces fallan"

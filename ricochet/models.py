@@ -53,6 +53,7 @@ class Bullet:
     max_bounces: int = MAX_BOUNCES
     bounces: int = 0
     age: float = 0.0
+    distance_travelled: float = 0.0
     alive: bool = True
 
 

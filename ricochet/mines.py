@@ -67,8 +67,8 @@ class MineSystem:
             if not mine.alive or not self.bullet_touches_mine(bullet, mine):
                 continue
             bullet.alive = False
-            self.trigger(mine)
             self.game.create_burst(bullet.position, bullet.color, 5, 55)
+            self.explode(mine)
             return True
         return False
 
@@ -84,18 +84,19 @@ class MineSystem:
             ):
                 mine.owner_has_left = True
 
-            if not mine.triggered:
-                if mine.age >= MINE_AUTO_TRIGGER_TIME:
-                    self.trigger(mine)
-                else:
-                    for tank in tanks:
-                        if not tank.alive:
-                            continue
-                        if tank.tank_id == mine.owner_id and not mine.owner_has_left:
-                            continue
-                        if tank.position.distance_to(mine.position) <= MINE_TRIGGER_RADIUS:
-                            self.trigger(mine)
-                            break
+            for tank in tanks:
+                if not tank.alive:
+                    continue
+                if tank.tank_id == mine.owner_id and not mine.owner_has_left:
+                    continue
+                if tank.position.distance_to(mine.position) <= MINE_TRIGGER_RADIUS:
+                    self.explode(mine)
+                    break
+
+            if not mine.alive:
+                continue
+            if not mine.triggered and mine.age >= MINE_AUTO_TRIGGER_TIME:
+                self.trigger(mine)
 
             if not mine.triggered:
                 continue
@@ -113,9 +114,17 @@ class MineSystem:
         if not mine.alive:
             return
         mine.alive = False
+        chained_mines = [
+            other
+            for other in self.game.mines
+            if other.alive and other.position.distance_to(mine.position) <= MINE_EXPLOSION_RADIUS
+        ]
         self.game.create_burst(mine.position, (255, 116, 66), 42, 190)
         self.game.create_burst(mine.position, (246, 224, 164), 24, 125)
         self.game.create_burst(mine.position, (52, 49, 40), 18, 85)
+
+        for other in chained_mines:
+            self.explode(other)
 
         for tank in self.game.all_tanks():
             if tank.alive and tank.position.distance_to(mine.position) <= MINE_EXPLOSION_RADIUS:
