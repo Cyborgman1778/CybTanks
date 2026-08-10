@@ -47,6 +47,8 @@ class Tank:
     avoid_cell: GridCell | None = None
     avoid_timer: float = 0.0
     route_variant: int = 0
+    route_seed: int = 0
+    recent_cells: list[GridCell] = field(default_factory=list)
 
 
 @dataclass

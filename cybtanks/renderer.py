@@ -17,6 +17,7 @@ from .config import (
     LIGHT_GRAY,
     MINE_WARNING_DURATION,
     MAX_PLAYER_BULLETS,
+    MAX_PLAYER_LIVES,
     MUTED,
     PLAYER_COLOR,
     ROWS,
@@ -214,14 +215,18 @@ class Renderer:
         if self.game.state == "level_clear":
             status = f"NIVEL {self.game.level:02d} SUPERADO"
             status_color = (132, 232, 211)
-        elif self.game.state == "lost":
-            status = f"NIVEL {self.game.level:02d}  UNIDAD DESTRUIDA"
+        elif self.game.state == "life_lost":
+            status = f"VIDA PERDIDA   VIDAS: {self.game.lives}/{MAX_PLAYER_LIVES}"
+            status_color = (255, 181, 112)
+        elif self.game.state == "game_over":
+            status = "SIN VIDAS"
             status_color = (255, 135, 112)
         else:
             status = (
                 f"NIVEL {self.game.level:02d}   HOSTILES: {remaining}   "
                 f"BALAS: {player_bullets}/{MAX_PLAYER_BULLETS}   "
-                f"MINAS: {player_mines}/{self.game.player.max_mines}"
+                f"MINAS: {player_mines}/{self.game.player.max_mines}   "
+                f"VIDAS: {self.game.lives}/{MAX_PLAYER_LIVES}"
             )
             status_color = LIGHT_GRAY
         status_surface = self.hud_font.render(status, True, status_color)
@@ -235,10 +240,20 @@ class Renderer:
         overlay.fill((7, 12, 8, 205))
         board.blit(overlay, (0, 0))
         level_clear = self.game.state == "level_clear"
-        text = f"NIVEL {self.game.level} SUPERADO" if level_clear else "UNIDAD DESTRUIDA"
-        color = (143, 232, 215) if level_clear else (255, 139, 114)
+        life_lost = self.game.state == "life_lost"
+        if level_clear:
+            text = f"NIVEL {self.game.level} SUPERADO"
+            prompt_text = "CLIC O ENTER: SIGUIENTE NIVEL"
+            color = (143, 232, 215)
+        elif life_lost:
+            text = "VIDA PERDIDA"
+            prompt_text = "PULSA R O HAZ CLIC PARA REAPARECER"
+            color = (255, 181, 112)
+        else:
+            text = "SIN VIDAS"
+            prompt_text = "PULSA R O HAZ CLIC PARA REINICIAR EL NIVEL"
+            color = (255, 139, 114)
         title = self.end_font.render(text, True, color)
-        prompt_text = "CLIC O ENTER: SIGUIENTE NIVEL" if level_clear else "PULSA R O HAZ CLIC PARA REINTENTAR"
         prompt = self.hud_font.render(prompt_text, True, CREAM)
         board.blit(title, title.get_rect(center=(BOARD_WIDTH // 2, BOARD_HEIGHT // 2 - 25)))
         board.blit(prompt, prompt.get_rect(center=(BOARD_WIDTH // 2, BOARD_HEIGHT // 2 + 34)))

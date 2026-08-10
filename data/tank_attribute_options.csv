@@ -7,6 +7,7 @@ velocidad_bala,opcion,"slow=230; fast=400",píxeles por segundo,Velocidad de los
 maximo_balas,entero,0 o mayor,balas activas,Número máximo de balas simultáneas en el tablero
 rebotes_bala,entero,0 o mayor,rebotes,Cantidad máxima de rebotes por proyectil
 maximo_minas,entero,0 o mayor,minas activas,Número máximo de minas simultáneas en el tablero
+vidas,entero,0 o mayor,vidas disponibles,Número de intentos del jugador antes de reiniciar el nivel
 cadencia_disparo,opcion,"slow=0.75; normal=0.38; fast=0.16",segundos,Tiempo mínimo entre disparos
 nivel_inteligencia,opcion,"player; medium; medium_low",categoría,Nivel general de inteligencia
 calculo_rebote,opcion,"manual; accurate; imperfect",categoría,Forma de calcular disparos con rebote

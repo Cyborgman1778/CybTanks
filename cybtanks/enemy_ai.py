@@ -136,7 +136,13 @@ class EnemyAISystem:
                     continue
                 overlap_cost = sum(penalties.get(cell, 0.0) for cell in path)
                 reservation_cost = 8.0 if candidate in reserved_goals else 0.0
-                variant = ((col * 7 + row * 11 + enemy.tank_id + enemy.route_variant) % 9) * 0.025
+                variant_hash = (
+                    col * 73_856_093
+                    ^ row * 19_349_663
+                    ^ enemy.route_seed
+                    ^ enemy.route_variant * 83_492_791
+                )
+                variant = (variant_hash & 0xFFFF) / 0xFFFF * 1.8
                 score = len(path) + overlap_cost + distance_to_player * 0.7 + reservation_cost + variant
                 candidates.append((score, candidate, path))
 
@@ -159,6 +165,18 @@ class EnemyAISystem:
                 penalties[cell] = penalties.get(cell, 0.0) + penalty
             if ally.goal is not None:
                 penalties[ally.goal] = penalties.get(ally.goal, 0.0) + 4.0
+
+        for index, cell in enumerate(reversed(enemy.recent_cells[-10:])):
+            penalties[cell] = penalties.get(cell, 0.0) + max(0.5, 3.5 - index * 0.35)
+
+        noise_seed = enemy.route_seed ^ (enemy.route_variant * 83_492_791)
+        for row in range(1, ROWS - 1):
+            for col in range(1, COLS - 1):
+                cell = (col, row)
+                if self.game.world.is_wall(cell):
+                    continue
+                value = (col * 73_856_093) ^ (row * 19_349_663) ^ noise_seed
+                penalties[cell] = penalties.get(cell, 0.0) + (value & 0xFFFF) / 0xFFFF * 0.45
         return penalties
 
     def mine_blocked_cells(self) -> set[tuple[int, int]]:
@@ -248,6 +266,10 @@ class EnemyAISystem:
             else Vec2()
         )
         enemy.velocity = actual_movement / dt if dt > 0 else Vec2()
+        current_cell = grid_cell(enemy.position)
+        if not enemy.recent_cells or enemy.recent_cells[-1] != current_cell:
+            enemy.recent_cells.append(current_cell)
+            del enemy.recent_cells[:-12]
         if movement.length_squared() > 0:
             expected_distance = enemy.speed * dt
             if actual_movement.length() < expected_distance * 0.2:

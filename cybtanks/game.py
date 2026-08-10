@@ -15,6 +15,7 @@ from .config import (
     HUD_HEIGHT,
     MAX_BOUNCES,
     MAX_PLAYER_BULLETS,
+    MAX_PLAYER_LIVES,
     MAX_PLAYER_MINES,
     MOVEMENT_SPEEDS,
     PLAYER_BULLET_SPEED,
@@ -118,6 +119,7 @@ class Game:
             fire_timer=1.0 + index * 0.28,
             mine_timer=1.4 + index * 0.25,
             plan_timer=index * 0.18,
+            route_seed=random.getrandbits(31),
         )
         self.next_tank_id += 1
         return tank
@@ -130,6 +132,7 @@ class Game:
         self.next_tank_id = 1
         self.elapsed = 0.0
         self.state = "playing"
+        self.lives = MAX_PLAYER_LIVES
         self.world.reset()
         self.renderer.rebuild_board_background()
         self.bullets = []
@@ -147,6 +150,48 @@ class Game:
     def next_level(self) -> None:
         self.level += 1
         self.start_level()
+
+    def respawn_player(self) -> None:
+        if self.lives <= 0:
+            return
+        self.bullets = []
+        self.mines = []
+        self.particles = []
+        self.wrecks = [wreck for wreck in self.wrecks if wreck[2] != PLAYER_COLOR]
+
+        self.player = self.make_tank("player", 1, 1)
+        self.player.position = cell_center(self.safe_respawn_cell())
+        for enemy in self.enemies:
+            if not enemy.alive:
+                continue
+            enemy.path = []
+            enemy.goal = None
+            enemy.plan_timer = 0
+            enemy.aim_timer = 0
+            enemy.stuck_timer = 0
+            enemy.avoid_cell = None
+            enemy.avoid_timer = 0
+            enemy.route_variant += 1
+            enemy.route_seed = random.getrandbits(31)
+            enemy.recent_cells.clear()
+        self.state = "playing"
+
+    def safe_respawn_cell(self) -> tuple[int, int]:
+        candidates = []
+        for row in range(1, len(self.world.tiles) - 1):
+            for col in range(1, len(self.world.tiles[row]) - 1):
+                cell = (col, row)
+                if self.world.is_wall(cell):
+                    continue
+                position = cell_center(cell)
+                if any(
+                    enemy.alive and position.distance_to(enemy.position) < TILE * 1.5
+                    for enemy in self.enemies
+                ):
+                    continue
+                distance_from_start = abs(col - 1) + abs(row - 1)
+                candidates.append((distance_from_start, cell))
+        return min(candidates)[1] if candidates else (1, 1)
 
     def all_tanks(self) -> list[Tank]:
         return [self.player, *self.enemies]
@@ -219,8 +264,11 @@ class Game:
         self.particles = [particle for particle in self.particles if particle.life > 0]
 
     def evaluate_state(self) -> None:
+        if self.state != "playing":
+            return
         if not self.player.alive:
-            self.state = "lost"
+            self.lives = max(0, self.lives - 1)
+            self.state = "life_lost" if self.lives > 0 else "game_over"
         elif all(not enemy.alive for enemy in self.enemies):
             self.state = "level_clear"
 
@@ -240,7 +288,10 @@ class Game:
                 if event.key == pygame.K_ESCAPE:
                     self.running = False
                 elif event.key == pygame.K_r:
-                    self.start_level()
+                    if self.state == "life_lost":
+                        self.respawn_player()
+                    else:
+                        self.start_level()
                 elif event.key == pygame.K_SPACE and self.state == "playing":
                     self.mine_system.place(self.player)
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE) and self.state == "level_clear":
@@ -251,7 +302,9 @@ class Game:
                 self.update_mouse(event.pos)
                 if self.state == "level_clear":
                     self.next_level()
-                elif self.state == "lost":
+                elif self.state == "life_lost":
+                    self.respawn_player()
+                elif self.state == "game_over":
                     self.start_level()
                 elif self.mouse_on_board:
                     self.combat.shoot(self.player)

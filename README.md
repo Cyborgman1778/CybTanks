@@ -53,4 +53,12 @@ El amarillo aparece a partir del nivel 5. Comparte disparo e inteligencia con el
 
 Los enemigos reservan destinos diferentes alrededor del jugador y penalizan las rutas que ya utilizan sus aliados. Si encuentran un tanque bloqueando el paso o dejan de avanzar, recalculan una ruta alternativa. También descartan disparos y colocaciones de minas que pondrían directamente a un aliado en peligro.
 
+Cada tanque móvil recibe una semilla de ruta distinta al comenzar y recuerda las últimas celdas recorridas. Esto cambia los desempates de A*, evita bucles y hace que una misma posición inicial pueda producir caminos diferentes entre intentos.
+
+## Vidas
+
+El jugador comienza cada nivel con tres vidas. Al perder una vida reaparece en la celda segura más cercana, se limpian balas y minas, y los enemigos que ya fueron destruidos permanecen destruidos. Los enemigos supervivientes conservan su estado, pero recalculan sus rutas con semillas nuevas.
+
+Cuando se agotan las tres vidas se reinicia el nivel completo y regresan todos sus enemigos.
+
 Las balas del jugador necesitan recorrer una distancia mínima antes de poder rebotar. Si se dispara directamente contra una pared estando pegado a ella, el proyectil se rompe en vez de rebotar. La distancia se configura con `PLAYER_MIN_RICOCHET_DISTANCE` en `cybtanks/config.py`.
