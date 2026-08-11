@@ -326,17 +326,20 @@ class EnemyAISystem:
             for ally in self.game.enemies
             if ally.alive
             and ally.tank_id != enemy.tank_id
-            and grid_cell(ally.position) == current_cell
+            and (
+                grid_cell(ally.position) == current_cell
+                or ally.position.distance_to(enemy.position)
+                <= TANK_HALF * 2 + max(enemy.speed, ally.speed) * dt + 1.0
+            )
         ]
-        if not cellmates or max(
-            tank.stationary_timer for tank in (enemy, *cellmates)
-        ) < 0.12:
+        group = [enemy, *cellmates]
+        wait_time = 0.05 if any(tank.kind == "yellow" for tank in group) else 0.12
+        if not cellmates or max(tank.stationary_timer for tank in group) < wait_time:
             return movement
-        if any(self.mine_danger(tank) for tank in (enemy, *cellmates)):
+        if any(self.mine_danger(tank) for tank in group):
             return movement
 
         center = cell_center(current_cell)
-        group = [enemy, *cellmates]
         leader = min(group, key=lambda tank: tank.tank_id)
         maximum_distance = enemy.speed * dt
         if leader.tank_id == enemy.tank_id:
@@ -437,7 +440,8 @@ class EnemyAISystem:
         if enemy.avoid_timer == 0:
             enemy.avoid_cell = None
         self.track_movement_progress(enemy, dt)
-        if enemy.net_stuck_timer >= 0.45:
+        net_stuck_limit = 0.2 if enemy.kind == "yellow" else 0.45
+        if enemy.net_stuck_timer >= net_stuck_limit:
             self.abandon_stuck_route(enemy)
         has_active_bullet = self.game.combat.active_bullets(enemy) >= enemy.max_bullets
         mine_danger = self.mine_danger(enemy)
@@ -564,7 +568,8 @@ class EnemyAISystem:
             else:
                 enemy.stuck_timer = 0.0
 
-        if enemy.stuck_timer >= 0.35:
+        local_stuck_limit = 0.2 if enemy.kind == "yellow" else 0.35
+        if enemy.stuck_timer >= local_stuck_limit:
             self.abandon_stuck_route(enemy)
         if actual_movement.length_squared() > 0:
             move_angle = math.atan2(actual_movement.y, actual_movement.x)

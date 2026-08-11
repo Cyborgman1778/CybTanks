@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from cybtanks.catalog import load_enemy_catalog
 from cybtanks.combat import CombatSystem
-from cybtanks.config import COLS, FIRE_RATE_DELAYS, MAP_LAYOUTS, ROWS
+from cybtanks.config import COLS, FIRE_RATE_DELAYS, MAP_LAYOUTS, ROWS, SHOT_THINK_DELAYS
 from cybtanks.enemy_ai import EnemyAISystem
 from cybtanks.game import enemy_initial_fire_delay
 from cybtanks.models import Bullet, Mine, ShotTrace, Tank, Vec2
@@ -103,6 +103,17 @@ class FriendlyFireTraceTests(unittest.TestCase):
         self.assertTrue(trace.ally_hit)
         self.assertFalse(trace.target_hit)
 
+    def test_trace_rejects_immediate_bounce_while_bullet_touches_owner(self) -> None:
+        shooter = make_tank(1, "enemy", Vec2(132.88, 78.48), speed=180.0)
+        target = make_tank(2, "player", Vec2(800, 500))
+        shooter.path = [(1, 1)]
+        combat = self.make_combat([shooter])
+
+        trace = combat.trace_shot(shooter, 3.79667, target)
+
+        self.assertTrue(trace.self_hit)
+        self.assertFalse(trace.target_hit)
+
     def test_runtime_follows_the_same_ricochet_authorized_by_trace(self) -> None:
         self.world.reset(MAP_LAYOUTS[7])
         shooter = make_tank(1, "enemy", cell_center((8, 2)))
@@ -156,6 +167,70 @@ class FriendlyFireTraceTests(unittest.TestCase):
             combat.movement_safe_from_friendly_fire(ally, Vec2(0, -20))
         )
         self.assertTrue(combat.movement_safe_from_friendly_fire(ally, Vec2(0, 10)))
+
+    def test_self_safe_owner_disintegrates_own_bounced_bullet(self) -> None:
+        owner = make_tank(1, "enemy", Vec2(300, 300))
+        player = make_tank(2, "player", Vec2(800, 500))
+        bullet = Bullet(
+            position=owner.position.copy(),
+            velocity=Vec2(),
+            team="enemy",
+            owner_id=owner.tank_id,
+            color=(0, 0, 0),
+            bounces=1,
+            age=1.0,
+        )
+        audio = SimpleNamespace(
+            play_bullet_disintegrate=lambda: None,
+        )
+        game = SimpleNamespace(
+            world=self.world,
+            player=player,
+            enemies=[owner],
+            bullets=[bullet],
+            audio=audio,
+            mine_system=SimpleNamespace(collide_bullet=lambda projectile: None),
+            create_burst=lambda *args: None,
+            destroy_tank=lambda tank: self.fail("Self-safe owner was destroyed"),
+        )
+        game.all_tanks = lambda: [player, owner]
+        combat = CombatSystem(game)
+
+        combat.update(0.0)
+
+        self.assertTrue(owner.alive)
+        self.assertEqual(game.bullets, [])
+        self.assertEqual(owner.shot_think_timer, SHOT_THINK_DELAYS["slow"])
+
+    def test_owner_without_self_safety_can_still_hit_itself(self) -> None:
+        owner = make_tank(1, "enemy", Vec2(300, 300))
+        owner.self_safe = False
+        player = make_tank(2, "player", Vec2(800, 500))
+        bullet = Bullet(
+            position=owner.position.copy(),
+            velocity=Vec2(),
+            team="enemy",
+            owner_id=owner.tank_id,
+            color=(0, 0, 0),
+            bounces=1,
+            age=1.0,
+        )
+        game = SimpleNamespace(
+            world=self.world,
+            player=player,
+            enemies=[owner],
+            bullets=[bullet],
+            audio=SimpleNamespace(play_bullet_disintegrate=lambda: None),
+            mine_system=SimpleNamespace(collide_bullet=lambda projectile: None),
+            create_burst=lambda *args: None,
+            destroy_tank=lambda tank: setattr(tank, "alive", False),
+        )
+        game.all_tanks = lambda: [player, owner]
+        combat = CombatSystem(game)
+
+        combat.update(0.0)
+
+        self.assertFalse(owner.alive)
 
 
 class EnemyMovementTests(unittest.TestCase):
@@ -372,6 +447,81 @@ class EnemyMovementTests(unittest.TestCase):
         self.assertGreater(leader_movement.x, 0)
         self.assertGreater(follower_movement.x, 0)
         self.assertGreater(follower.detour_timer, 0)
+
+    def test_touching_yellows_across_cells_form_queue_quickly(self) -> None:
+        leader = make_tank(
+            1,
+            "enemy",
+            Vec2(104.6, 98.1),
+            speed=180.0,
+            kind="yellow",
+        )
+        follower = make_tank(
+            2,
+            "enemy",
+            Vec2(90.0, 129.2),
+            speed=180.0,
+            kind="yellow",
+        )
+        player = make_tank(3, "player", Vec2(800, 500))
+        leader.stationary_timer = 0.06
+        follower.stationary_timer = 0.06
+        ai, _ = self.make_ai(player, [leader, follower])
+
+        leader_movement = ai.coordinate_crowded_cell(
+            leader,
+            cell_center((1, 1)) - leader.position,
+            1 / 60,
+        )
+        follower_movement = ai.coordinate_crowded_cell(
+            follower,
+            cell_center((1, 1)) - follower.position,
+            1 / 60,
+        )
+
+        self.assertLess(leader_movement.x, 0)
+        self.assertLess(follower_movement.x, 0)
+        self.assertGreater(follower.detour_timer, 0)
+
+    def test_yellow_replans_bounded_movement_after_shorter_delay(self) -> None:
+        enemy = make_tank(
+            1,
+            "enemy",
+            cell_center((2, 2)),
+            speed=180.0,
+            kind="yellow",
+        )
+        player = make_tank(2, "player", cell_center((8, 2)))
+        enemy.path = [(3, 2)]
+        enemy.goal = (3, 2)
+        enemy.plan_timer = 1.0
+        enemy.fire_timer = 1.0
+        enemy.net_stuck_timer = 0.21
+        ai, _ = self.make_ai(player, [enemy])
+
+        ai.update_enemy(enemy, 0.0)
+
+        self.assertEqual(enemy.route_variant, 1)
+
+    def test_yellow_replans_local_blockage_after_shorter_delay(self) -> None:
+        enemy = make_tank(
+            1,
+            "enemy",
+            cell_center((2, 2)),
+            speed=180.0,
+            kind="yellow",
+        )
+        player = make_tank(2, "player", cell_center((8, 2)))
+        enemy.path = [(3, 2)]
+        enemy.goal = (3, 2)
+        enemy.plan_timer = 1.0
+        enemy.fire_timer = 1.0
+        enemy.stuck_timer = 0.21
+        ai, _ = self.make_ai(player, [enemy])
+
+        ai.update_enemy(enemy, 0.0)
+
+        self.assertEqual(enemy.route_variant, 1)
 
     def test_full_speed_back_and_forth_counts_as_no_net_progress(self) -> None:
         enemy = make_tank(1, "enemy", Vec2(300, 300), speed=180.0)

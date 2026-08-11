@@ -171,7 +171,10 @@ class CombatSystem:
             touches_owner = self.circle_touches_tank(position, shooter)
             if not touches_owner:
                 left_owner = True
-            elif left_owner:
+            elif left_owner or bounces > 0:
+                trace.self_hit = True
+                return trace
+            if bounces > 0 and self.ally_route_touches_shot(position, shooter):
                 trace.self_hit = True
                 return trace
 
@@ -448,6 +451,9 @@ class CombatSystem:
                         continue
                     if not self.circle_touches_tank(bullet.position, tank):
                         continue
+                    if bullet.owner_id == tank.tank_id and tank.self_safe:
+                        self.destroy_bullet(bullet, 7, 75)
+                        break
                     self.hit_tank(tank)
                     bullet.alive = False
                     self.game.audio.play_bullet_disintegrate()
