@@ -105,16 +105,8 @@ class EnemyAISystem:
     def plan_path(self, enemy: Tank) -> None:
         start = grid_cell(enemy.position)
         player_cell = grid_cell(self.game.player.position)
-        mine_blocked = self.mine_blocked_cells()
-        occupied = {
-            grid_cell(ally.position)
-            for ally in self.game.enemies
-            if ally.alive and ally.tank_id != enemy.tank_id
-        }
-        blocked = mine_blocked | occupied
+        blocked = self.mine_blocked_cells()
         blocked.discard(start)
-        if enemy.avoid_cell is not None and enemy.avoid_timer > 0:
-            blocked.add(enemy.avoid_cell)
 
         penalties = self.route_penalties(enemy)
         reserved_goals = {
@@ -126,7 +118,11 @@ class EnemyAISystem:
         for row in range(max(1, player_cell[1] - 2), min(ROWS - 1, player_cell[1] + 3)):
             for col in range(max(1, player_cell[0] - 2), min(COLS - 1, player_cell[0] + 3)):
                 candidate = (col, row)
-                if self.game.world.is_wall(candidate) or candidate in blocked:
+                if (
+                    self.game.world.is_wall(candidate)
+                    or candidate in blocked
+                    or (enemy.speed > 0 and candidate == start)
+                ):
                     continue
                 distance_to_player = abs(col - player_cell[0]) + abs(row - player_cell[1])
                 if distance_to_player > 2:
@@ -146,10 +142,20 @@ class EnemyAISystem:
                 score = len(path) + overlap_cost + distance_to_player * 0.7 + reservation_cost + variant
                 candidates.append((score, candidate, path))
 
+        if not candidates:
+            col, row = start
+            for candidate in ((col + 1, row), (col - 1, row), (col, row + 1), (col, row - 1)):
+                if self.game.world.is_wall(candidate) or candidate in blocked:
+                    continue
+                path = self.game.world.find_path(start, candidate, blocked, penalties)
+                if path:
+                    score = len(path) + sum(penalties.get(cell, 0.0) for cell in path)
+                    candidates.append((score, candidate, path))
+
         if candidates:
             _, enemy.goal, enemy.path = min(candidates, key=lambda item: item[0])
         else:
-            enemy.goal = player_cell
+            enemy.goal = start
             enemy.path = []
         enemy.plan_timer = 0.75 + random.random() * 0.4
 
@@ -168,6 +174,9 @@ class EnemyAISystem:
 
         for index, cell in enumerate(reversed(enemy.recent_cells[-10:])):
             penalties[cell] = penalties.get(cell, 0.0) + max(0.5, 3.5 - index * 0.35)
+
+        if enemy.avoid_cell is not None and enemy.avoid_timer > 0:
+            penalties[enemy.avoid_cell] = penalties.get(enemy.avoid_cell, 0.0) + 10.0
 
         noise_seed = enemy.route_seed ^ (enemy.route_variant * 83_492_791)
         for row in range(1, ROWS - 1):
@@ -198,6 +207,58 @@ class EnemyAISystem:
             for mine in self.game.mines
         )
 
+    def steer_around_friendly_fire(self, enemy: Tank, movement: Vec2) -> Vec2:
+        if self.game.combat.movement_safe_from_friendly_fire(enemy, movement):
+            return movement
+
+        base_angle = math.atan2(movement.y, movement.x)
+        side = 1 if enemy.route_seed & 1 else -1
+        offsets = (
+            side * math.pi / 4,
+            -side * math.pi / 4,
+            side * math.pi / 2,
+            -side * math.pi / 2,
+            side * math.pi * 3 / 4,
+            -side * math.pi * 3 / 4,
+            math.pi,
+        )
+        distance = movement.length()
+        best_movement = movement
+        best_clearance = self.game.combat.friendly_fire_destination_clearance(
+            enemy,
+            movement,
+        )
+        for offset in offsets:
+            angle = base_angle + offset
+            candidate = Vec2(math.cos(angle), math.sin(angle)) * distance
+            if self.game.world.tank_touches_wall(enemy.position + candidate):
+                continue
+            if self.game.combat.movement_safe_from_friendly_fire(enemy, candidate):
+                return candidate
+            clearance = self.game.combat.friendly_fire_destination_clearance(
+                enemy,
+                candidate,
+            )
+            if clearance > best_clearance:
+                best_movement = candidate
+                best_clearance = clearance
+        return best_movement
+
+    def enemy_push_safe_from_friendly_fire(self, tank: Tank, movement: Vec2) -> bool:
+        return tank.team != "enemy" or self.game.combat.movement_safe_from_friendly_fire(
+            tank,
+            movement,
+        )
+
+    def move_enemy(self, enemy: Tank, movement: Vec2) -> Vec2:
+        return self.game.world.move_tank(
+            enemy,
+            movement,
+            self.game.all_tanks(),
+            lambda tank, pushed: tank.tank_id == enemy.tank_id
+            or self.enemy_push_safe_from_friendly_fire(tank, pushed),
+        )
+
     def plan_mine_escape(self, enemy: Tank) -> None:
         safe_distance = MINE_EXPLOSION_RADIUS + TANK_HALF + MINE_ESCAPE_MARGIN
         start = grid_cell(enemy.position)
@@ -219,8 +280,11 @@ class EnemyAISystem:
 
         candidates.sort()
         for _, _, candidate in candidates:
-            blocked = {enemy.avoid_cell} if enemy.avoid_cell is not None and enemy.avoid_timer > 0 else set()
-            path = self.game.world.find_path(start, candidate, blocked, self.route_penalties(enemy))
+            path = self.game.world.find_path(
+                start,
+                candidate,
+                penalties=self.route_penalties(enemy),
+            )
             if path is None:
                 continue
             if not path and enemy.position.distance_to(cell_center(candidate)) >= 0.5:
@@ -242,36 +306,64 @@ class EnemyAISystem:
             enemy.avoid_cell = None
         has_active_bullet = self.game.combat.active_bullets(enemy) >= enemy.max_bullets
         mine_danger = self.mine_danger(enemy)
-        can_move = mine_danger or not (enemy.self_safe and has_active_bullet)
-        if enemy.speed > 0 and can_move:
+        if enemy.speed > 0:
             if mine_danger and (not enemy.escaping_mines or enemy.plan_timer <= 0):
                 self.plan_mine_escape(enemy)
-            elif not mine_danger and (enemy.escaping_mines or enemy.plan_timer <= 0):
+            elif not mine_danger and (
+                enemy.escaping_mines or enemy.plan_timer <= 0 or not enemy.path
+            ):
                 self.plan_path(enemy)
         enemy.escaping_mines = mine_danger
 
         movement = Vec2()
-        if enemy.speed > 0 and can_move and enemy.path:
-            target_position = cell_center(enemy.path[0])
-            difference = target_position - enemy.position
-            arrival_distance = 0.5 if mine_danger else 3.0
-            if difference.length() < arrival_distance:
-                enemy.path.pop(0)
-            elif difference.length_squared() > 0:
-                movement = difference.normalize() * enemy.speed * dt
+        if enemy.speed > 0:
+            for attempt in range(2):
+                while enemy.path:
+                    target_position = cell_center(enemy.path[0])
+                    difference = target_position - enemy.position
+                    arrival_distance = 0.5 if mine_danger else 3.0
+                    if difference.length() >= arrival_distance:
+                        movement = difference.normalize() * enemy.speed * dt
+                        break
+                    enemy.path.pop(0)
+                    enemy.plan_timer = 0
+                if enemy.path or attempt > 0:
+                    break
+                if mine_danger:
+                    self.plan_mine_escape(enemy)
+                else:
+                    self.plan_path(enemy)
 
-        actual_movement = (
-            self.game.world.move_tank(enemy, movement, self.game.all_tanks())
-            if movement.length_squared() > 0
-            else Vec2()
-        )
+        movement = self.steer_around_friendly_fire(enemy, movement)
+
+        starting_position = enemy.position.copy()
+        actual_movement = self.move_enemy(enemy, movement) if movement.length_squared() > 0 else Vec2()
+        expected_distance = enemy.speed * dt
+        if expected_distance > 0 and actual_movement.length() < expected_distance * 0.2:
+            base_angle = math.atan2(movement.y, movement.x)
+            side = 1 if (enemy.route_seed + enemy.route_variant) & 1 else -1
+            for offset in (side * math.pi / 2, -side * math.pi / 2, math.pi):
+                travelled = enemy.position.distance_to(starting_position)
+                remaining = expected_distance - travelled
+                if remaining <= 0.000_001:
+                    break
+                angle = base_angle + offset
+                detour = Vec2(math.cos(angle), math.sin(angle)) * remaining
+                detour = self.steer_around_friendly_fire(enemy, detour)
+                if self.game.world.tank_touches_wall(enemy.position + detour):
+                    continue
+                detour_start = enemy.position.copy()
+                self.move_enemy(enemy, detour)
+                if enemy.position.distance_to(detour_start) > 0.000_001:
+                    enemy.plan_timer = 0
+                    break
+            actual_movement = enemy.position - starting_position
         enemy.velocity = actual_movement / dt if dt > 0 else Vec2()
         current_cell = grid_cell(enemy.position)
         if not enemy.recent_cells or enemy.recent_cells[-1] != current_cell:
             enemy.recent_cells.append(current_cell)
             del enemy.recent_cells[:-12]
         if movement.length_squared() > 0:
-            expected_distance = enemy.speed * dt
             if actual_movement.length() < expected_distance * 0.2:
                 enemy.stuck_timer += dt
             else:
@@ -323,10 +415,15 @@ class EnemyAISystem:
 
         desired_angle = enemy.aim_angle if enemy.aim_angle is not None else direct_angle
         enemy.turret_angle = turn_towards(enemy.turret_angle, desired_angle, 2.25 * dt)
-        turret_ready = abs(angle_difference(desired_angle, enemy.turret_angle)) < 0.075
+        aim_tolerance = 0.045 if enemy.kind == "dark_green" else 0.075
+        turret_ready = abs(angle_difference(desired_angle, enemy.turret_angle)) < aim_tolerance
 
         if enemy.fire_timer <= 0 and enemy.shot_ready and turret_ready:
-            safety_check = self.game.combat.trace_shot(enemy, desired_angle, self.game.player)
+            safety_check = self.game.combat.trace_shot(
+                enemy,
+                enemy.turret_angle,
+                self.game.player,
+            )
             if safety_check.self_hit or safety_check.ally_hit:
                 enemy.aim_timer = 0
                 enemy.shot_ready = False
@@ -349,6 +446,7 @@ class EnemyAISystem:
     def update(self, dt: float) -> None:
         if not self.game.player.alive:
             return
+        self.game.combat.prepare_friendly_fire_paths("enemy")
         for enemy in self.game.enemies:
             if enemy.alive:
                 self.update_enemy(enemy, dt)

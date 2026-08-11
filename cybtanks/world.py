@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import heapq
 import math
+from collections.abc import Callable
 
 import pygame
 
@@ -81,7 +82,13 @@ class World:
                 return True
         return False
 
-    def move_tank(self, tank: Tank, movement: Vec2, tanks: list[Tank]) -> Vec2:
+    def move_tank(
+        self,
+        tank: Tank,
+        movement: Vec2,
+        tanks: list[Tank],
+        movement_allowed: Callable[[Tank, Vec2], bool] | None = None,
+    ) -> Vec2:
         original = tank.position.copy()
         for axis, amount in (("x", movement.x), ("y", movement.y)):
             if abs(amount) <= 0.000_001:
@@ -91,7 +98,14 @@ class World:
                 for other in tanks
                 if other.alive
             }
-            if self._push_axis(tank, amount, axis, tanks, set()):
+            if self._push_axis(
+                tank,
+                amount,
+                axis,
+                tanks,
+                set(),
+                movement_allowed,
+            ):
                 continue
             for other in tanks:
                 if other.alive and other.tank_id in snapshots:
@@ -105,6 +119,7 @@ class World:
         axis: str,
         tanks: list[Tank],
         chain: set[int],
+        movement_allowed: Callable[[Tank, Vec2], bool] | None,
     ) -> bool:
         if tank.tank_id in chain:
             return False
@@ -112,6 +127,11 @@ class World:
         candidate = tank.position.copy()
         setattr(candidate, axis, getattr(candidate, axis) + amount)
         if self.tank_touches_wall(candidate):
+            return False
+        if movement_allowed is not None and not movement_allowed(
+            tank,
+            candidate - tank.position,
+        ):
             return False
 
         while True:
@@ -124,7 +144,14 @@ class World:
             ]
             if not colliders:
                 break
-            if not self._push_axis(colliders[0], amount, axis, tanks, next_chain):
+            if not self._push_axis(
+                colliders[0],
+                amount,
+                axis,
+                tanks,
+                next_chain,
+                movement_allowed,
+            ):
                 return False
         tank.position.update(candidate)
         return True

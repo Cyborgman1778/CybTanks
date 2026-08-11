@@ -67,6 +67,7 @@ class Bullet:
     bounces: int = 0
     age: float = 0.0
     distance_travelled: float = 0.0
+    travel_budget: float = 0.0
     alive: bool = True
 
 

@@ -36,6 +36,12 @@ from .renderer import Renderer
 from .world import World, cell_center
 
 
+def enemy_initial_fire_delay(kind: str, index: int) -> float:
+    if kind == "dark_green":
+        return 0.65 + index % 3 * 0.08
+    return 1.0 + index * 0.28
+
+
 class Game:
     def __init__(self) -> None:
         pygame.mixer.pre_init(22_050, -16, 1, 256)
@@ -128,7 +134,7 @@ class Game:
             ricochet_accuracy=ricochet_accuracy,
             ricochet_success_rate=ricochet_success_rate,
             self_safe=self_safe,
-            fire_timer=1.0 + index * 0.28,
+            fire_timer=enemy_initial_fire_delay(kind, index) if not is_player else 0.0,
             mine_timer=1.4 + index * 0.25,
             plan_timer=index * 0.18,
             route_seed=random.getrandbits(31),
@@ -192,7 +198,7 @@ class Game:
             enemy.velocity.update(0, 0)
             enemy.cooldown = 0
             enemy.shot_think_timer = 0
-            enemy.fire_timer = 1.0 + index * 0.28
+            enemy.fire_timer = enemy_initial_fire_delay(enemy.kind, index)
             enemy.mine_timer = 1.4 + index * 0.25
             enemy.path = []
             enemy.goal = None

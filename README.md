@@ -58,11 +58,11 @@ Los enemigos móviles consideran el radio de las minas como una zona peligrosa, 
 
 El amarillo aparece a partir del nivel 5. Comparte disparo e inteligencia con el gris oscuro, se mueve a velocidad rápida y puede mantener hasta tres minas activas colocadas por su IA.
 
-Los enemigos reservan destinos diferentes alrededor del jugador y penalizan las rutas que ya utilizan sus aliados. Si encuentran un tanque bloqueando el paso o dejan de avanzar, recalculan una ruta alternativa. También descartan disparos y colocaciones de minas que pondrían directamente a un aliado en peligro.
+Los enemigos reservan destinos diferentes alrededor del jugador y penalizan las rutas que ya utilizan sus aliados. Un tanque ocupado reduce la prioridad de una ruta, pero no la bloquea: si es el mejor camino disponible, avanzan por él y pueden empujarse. Todos los enemigos móviles enlazan destinos para mantenerse en movimiento; solo los tipos con velocidad `stopped` permanecen quietos por decisión propia. También descartan disparos y colocaciones de minas que pondrían directamente a un aliado en peligro. La comprobación cubre los tramos continuos de sus próximas rutas, y los tanques desvían su movimiento para no entrar en la trayectoria de una bala aliada.
 
 ## Enemigo Verde Oscuro
 
-El verde oscuro aparece a partir del nivel 8. Se mueve como el gris oscuro, utiliza proyectiles rápidos y tiene inteligencia media con una probabilidad mayor de calcular correctamente los rebotes. Sus balas rápidas muestran una llama animada detrás del proyectil.
+El verde oscuro aparece a partir del nivel 8. Se mueve como el gris oscuro, utiliza proyectiles rápidos, tarda menos en preparar el siguiente disparo y espera a alinear mejor la torreta antes de disparar. Sus balas rápidas muestran una llama animada detrás del proyectil.
 
 Cada tanque móvil recibe una semilla de ruta distinta al comenzar y recuerda las últimas celdas recorridas. Esto cambia los desempates de A*, evita bucles y hace que una misma posición inicial pueda producir caminos diferentes entre intentos.
 
@@ -80,6 +80,6 @@ El movimiento vuelve a responder inmediatamente a los controles, sin inercia ni 
 
 ## Pensamiento De Disparo
 
-`tiempo_pensar_disparo` en `data/enemies.csv` es distinto de `cadencia_disparo`. Cuando desaparece una bala propia, el tanque debe esperar este nuevo tiempo antes de poder disparar otra: `slow=0.90`, `medium=0.50` y `fast=0.15` segundos. El jugador usa rápido, el amarillo medio y los demás tipos usan lento.
+`tiempo_pensar_disparo` en `data/enemies.csv` es distinto de `cadencia_disparo`. Cuando desaparece una bala propia, el tanque debe esperar este nuevo tiempo antes de poder disparar otra: `slow=0.90`, `medium=0.50` y `fast=0.15` segundos. El jugador usa rápido; el amarillo y el verde oscuro usan medio; los demás tipos usan lento.
 
 Las balas del jugador necesitan recorrer una distancia mínima antes de poder rebotar. Si se dispara directamente contra una pared estando pegado a ella, el proyectil se rompe en vez de rebotar. La distancia se configura con `PLAYER_MIN_RICOCHET_DISTANCE` en `cybtanks/config.py`.
