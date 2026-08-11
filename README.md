@@ -49,7 +49,7 @@ Los disparos lentos y rápidos tienen sonidos distintos, al igual que el rebote 
 
 Pulsa `Espacio` durante la partida para colocar una mina. El jugador puede mantener dos minas activas. Una bala o un tanque la hacen explotar instantáneamente. Si nadie la toca, a los ocho segundos inicia un aviso de parpadeo y pitidos durante 1,5 segundos y después explota.
 
-La explosión tiene tres tiles de diámetro, destruye tanques y rompe únicamente las paredes marcadas con `2` en el mapa activo.
+La explosión tiene tres tiles de diámetro, destruye tanques y proyectiles dentro de su radio, y rompe únicamente las paredes marcadas con `2` en el mapa activo.
 Si otra mina se encuentra dentro del radio, ambas explotan en el mismo frame y la reacción puede continuar en cadena.
 
 Los enemigos móviles consideran el radio de las minas como una zona peligrosa, buscan la salida segura más cercana y no vuelven a cruzarla mientras la mina siga activa. El gris claro conserva su propiedad de permanecer inmóvil.
@@ -62,9 +62,17 @@ Los enemigos reservan destinos diferentes alrededor del jugador y penalizan las 
 
 ## Enemigo Verde Oscuro
 
-El verde oscuro aparece a partir del nivel 8. Se mueve como el gris oscuro, utiliza proyectiles rápidos, tarda menos en preparar el siguiente disparo y espera a alinear mejor la torreta antes de disparar. Sus balas rápidas muestran una llama animada detrás del proyectil.
+El verde oscuro aparece a partir del nivel 8. Se mueve como el gris oscuro, utiliza proyectiles de `516 px/s`, empieza a disparar antes, usa cadencia media y espera a alinear mejor la torreta antes de disparar. Sus balas rápidas muestran una llama animada detrás del proyectil.
 
 Cada tanque móvil recibe una semilla de ruta distinta al comenzar y recuerda las últimas celdas recorridas. Esto cambia los desempates de A*, evita bucles y hace que una misma posición inicial pueda producir caminos diferentes entre intentos.
+
+## Enemigo Rosado
+
+El rosado aparece a partir del nivel 10. Se mueve a velocidad media, dispara proyectiles lentos con un rebote, no coloca minas y tiene una cadencia exacta de `0.50 s`. Su inteligencia táctica mantiene entre tres y cinco tiles de distancia, prioriza posiciones con línea de tiro y recalcula antes su puntería.
+
+## Escudos
+
+Desde el nivel 12, algunos tanques gris oscuro aparecen con un escudo azul. El primer impacto de bala consume el escudo y destruye el proyectil, pero el tanque sobrevive. Las explosiones de mina atraviesan esta protección. El escudo consumido no se recupera al reaparecer el jugador.
 
 ## Vidas
 
@@ -80,6 +88,6 @@ El movimiento vuelve a responder inmediatamente a los controles, sin inercia ni 
 
 ## Pensamiento De Disparo
 
-`tiempo_pensar_disparo` en `data/enemies.csv` es distinto de `cadencia_disparo`. Cuando desaparece una bala propia, el tanque debe esperar este nuevo tiempo antes de poder disparar otra: `slow=0.90`, `medium=0.50` y `fast=0.15` segundos. El jugador usa rápido; el amarillo y el verde oscuro usan medio; los demás tipos usan lento.
+`tiempo_pensar_disparo` en `data/enemies.csv` es distinto de `cadencia_disparo`. Cuando desaparece una bala propia, el tanque debe esperar este nuevo tiempo antes de poder disparar otra: `slow=0.90`, `medium=0.50` y `fast=0.15` segundos. El jugador usa rápido; el amarillo y el rosado usan medio; los demás tipos usan lento.
 
 Las balas del jugador necesitan recorrer una distancia mínima antes de poder rebotar. Si se dispara directamente contra una pared estando pegado a ella, el proyectil se rompe en vez de rebotar. La distancia se configura con `PLAYER_MIN_RICOCHET_DISTANCE` en `cybtanks/config.py`.

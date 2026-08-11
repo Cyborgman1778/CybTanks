@@ -34,6 +34,8 @@ class Tank:
     ricochet_accuracy: str
     ricochet_success_rate: float
     self_safe: bool
+    shield_hits: int = 0
+    shield_flash: float = 0.0
     alive: bool = True
     velocity: Vec2 = field(default_factory=Vec2)
     cooldown: float = 0.0
@@ -48,6 +50,11 @@ class Tank:
     shot_ready: bool = False
     escaping_mines: bool = False
     stuck_timer: float = 0.0
+    net_stuck_timer: float = 0.0
+    stationary_timer: float = 0.0
+    detour_timer: float = 0.0
+    progress_anchor: Vec2 | None = None
+    last_frame_position: Vec2 | None = None
     avoid_cell: GridCell | None = None
     avoid_timer: float = 0.0
     route_variant: int = 0

@@ -20,6 +20,7 @@ from .config import (
     MUTED,
     PLAYER_COLOR,
     ROWS,
+    SHIELD_FLASH_DURATION,
     COLS,
     TILE,
 )
@@ -173,6 +174,16 @@ class Renderer:
         )
         surface.blit(turret, turret.get_rect(center=tank.position))
 
+        if tank.shield_hits > 0:
+            radius = round(26 + math.sin(self.game.elapsed * 6 + tank.tank_id) * 1.5)
+            pygame.draw.circle(surface, (116, 207, 247), tank.position, radius, 2)
+            pygame.draw.circle(surface, (70, 128, 156), tank.position, radius - 3, 1)
+        elif tank.shield_flash > 0:
+            strength = clamp(tank.shield_flash / SHIELD_FLASH_DURATION, 0.0, 1.0)
+            radius = round(27 + (1.0 - strength) * 7)
+            color = tuple(round(channel * strength) for channel in (176, 229, 255))
+            pygame.draw.circle(surface, color, tank.position, radius, max(1, round(3 * strength)))
+
         if tank.team == "enemy":
             pygame.draw.rect(
                 surface,
@@ -189,7 +200,8 @@ class Renderer:
 
     def draw_bullets(self, surface: pygame.Surface) -> None:
         for bullet in self.game.bullets:
-            self._draw_bullet(surface, bullet)
+            if bullet.alive:
+                self._draw_bullet(surface, bullet)
 
     def _draw_bullet(self, surface: pygame.Surface, bullet: Bullet) -> None:
         direction = bullet.velocity.normalize() if bullet.velocity.length_squared() else Vec2(1, 0)
@@ -281,7 +293,7 @@ class Renderer:
         )
         screen.blit(controls, (285, 23))
         rule = self.small_font.render(
-            "VERDE: BALA RAPIDA + IA MEDIA   //   AMARILLO: VELOCIDAD + MINAS",
+            "ROSADO: IA TACTICA   //   VERDE: BALA RAPIDA   //   AMARILLO: MINAS",
             True,
             CREAM,
         )

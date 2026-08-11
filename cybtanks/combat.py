@@ -10,6 +10,7 @@ from .config import (
     BULLET_RADIUS,
     FIRE_RATE_DELAYS,
     PLAYER_MIN_RICOCHET_DISTANCE,
+    SHIELD_FLASH_DURATION,
     SHOT_THINK_DELAYS,
     TANK_HALF,
 )
@@ -36,6 +37,26 @@ class CombatSystem:
 
     def active_bullets(self, tank: Tank) -> int:
         return sum(bullet.alive and bullet.owner_id == tank.tank_id for bullet in self.game.bullets)
+
+    def start_shot_think_timer(self, owner_id: int) -> None:
+        owner = next(
+            (tank for tank in self.game.all_tanks() if tank.tank_id == owner_id),
+            None,
+        )
+        if owner is not None:
+            owner.shot_think_timer = max(
+                owner.shot_think_timer,
+                SHOT_THINK_DELAYS[owner.shot_think_speed],
+            )
+
+    def destroy_bullet(self, bullet: Bullet, amount: int = 5, force: float = 55) -> bool:
+        if not bullet.alive:
+            return False
+        bullet.alive = False
+        self.game.create_burst(bullet.position, bullet.color, amount, force)
+        self.game.audio.play_bullet_disintegrate()
+        self.start_shot_think_timer(bullet.owner_id)
+        return True
 
     @staticmethod
     def circle_touches_tank(position: Vec2, tank: Tank) -> bool:
@@ -322,6 +343,15 @@ class CombatSystem:
         self.game.audio.play_bullet_disintegrate()
         return True
 
+    def hit_tank(self, tank: Tank) -> None:
+        if tank.shield_hits <= 0:
+            self.game.destroy_tank(tank)
+            return
+        tank.shield_hits -= 1
+        tank.shield_flash = SHIELD_FLASH_DURATION
+        self.game.create_burst(tank.position, (117, 211, 255), 18, 115)
+        self.game.create_burst(tank.position, (224, 247, 255), 8, 75)
+
     def move_bullet_step(self, bullet: Bullet) -> None:
         if bullet.velocity.length_squared() == 0:
             return
@@ -418,7 +448,7 @@ class CombatSystem:
                         continue
                     if not self.circle_touches_tank(bullet.position, tank):
                         continue
-                    self.game.destroy_tank(tank)
+                    self.hit_tank(tank)
                     bullet.alive = False
                     self.game.audio.play_bullet_disintegrate()
                     break

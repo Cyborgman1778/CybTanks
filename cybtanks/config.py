@@ -40,6 +40,7 @@ MINE_ESCAPE_MARGIN = 12.0
 EXPLOSION_EFFECT_DURATION = 0.7
 TRACK_LIFETIME = 4.0
 TRACK_SPACING = 8.0
+SHIELD_FLASH_DURATION = 0.35
 
 MOVEMENT_SPEEDS = {
     "stopped": 0.0,
@@ -49,10 +50,12 @@ MOVEMENT_SPEEDS = {
 }
 BULLET_SPEEDS = {
     "slow": 230.0,
-    "fast": 430.0,
+    "fast": 516.0,
 }
 FIRE_RATE_DELAYS = {
     "slow": 0.75,
+    "medium": 0.55,
+    "tactical": 0.5,
     "normal": 0.38,
     "fast": 0.16,
 }
@@ -90,6 +93,8 @@ ASSET_NAMES = (
     "yellow_turret",
     "dark_green_body",
     "dark_green_turret",
+    "pink_body",
+    "pink_turret",
     "bullet_player",
     "bullet_enemy",
     "bullet_flame",

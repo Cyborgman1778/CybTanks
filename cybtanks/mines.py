@@ -69,9 +69,7 @@ class MineSystem:
         for mine in self.game.mines:
             if not mine.alive or not self.bullet_touches_mine(bullet, mine):
                 continue
-            bullet.alive = False
-            self.game.create_burst(bullet.position, bullet.color, 5, 55)
-            self.game.audio.play_bullet_disintegrate()
+            self.game.combat.destroy_bullet(bullet)
             self.explode(mine)
             return True
         return False
@@ -113,12 +111,20 @@ class MineSystem:
                 self.explode(mine)
 
         self.game.mines = [mine for mine in self.game.mines if mine.alive]
+        self.game.bullets = [bullet for bullet in self.game.bullets if bullet.alive]
 
     def explode(self, mine: Mine) -> None:
         if not mine.alive:
             return
         mine.alive = False
         self.game.create_explosion(mine.position, MINE_EXPLOSION_RADIUS)
+        for bullet in tuple(self.game.bullets):
+            if (
+                bullet.alive
+                and bullet.position.distance_squared_to(mine.position)
+                <= MINE_EXPLOSION_RADIUS**2
+            ):
+                self.game.combat.destroy_bullet(bullet, amount=8, force=95)
         chained_mines = [
             other
             for other in self.game.mines

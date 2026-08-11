@@ -6,10 +6,10 @@ from types import SimpleNamespace
 
 from cybtanks.catalog import load_enemy_catalog
 from cybtanks.combat import CombatSystem
-from cybtanks.config import COLS, MAP_LAYOUTS, ROWS, SHOT_THINK_DELAYS
+from cybtanks.config import COLS, FIRE_RATE_DELAYS, MAP_LAYOUTS, ROWS
 from cybtanks.enemy_ai import EnemyAISystem
 from cybtanks.game import enemy_initial_fire_delay
-from cybtanks.models import Bullet, ShotTrace, Tank, Vec2
+from cybtanks.models import Bullet, Mine, ShotTrace, Tank, Vec2
 from cybtanks.world import World, cell_center
 
 
@@ -302,6 +302,191 @@ class EnemyMovementTests(unittest.TestCase):
         self.assertAlmostEqual(movement.length(), intended.length())
         self.assertNotEqual(movement, intended)
 
+    def test_fast_enemy_does_not_oscillate_near_waypoint(self) -> None:
+        waypoint = cell_center((3, 2))
+        enemy = make_tank(1, "enemy", waypoint - Vec2(3, 0), speed=180.0)
+        player = make_tank(2, "player", cell_center((8, 2)))
+        enemy.path = [(3, 2), (4, 2)]
+        enemy.goal = (4, 2)
+        enemy.plan_timer = 1.0
+        enemy.fire_timer = 1.0
+        ai, _ = self.make_ai(player, [enemy])
+        start_x = enemy.position.x
+
+        ai.update_enemy(enemy, 1 / 30)
+
+        self.assertEqual(enemy.path[0], (4, 2))
+        self.assertGreater(enemy.position.x, start_x)
+
+    def test_valid_path_is_not_replanned_just_because_timer_expired(self) -> None:
+        enemy = make_tank(1, "enemy", cell_center((2, 2)), speed=58.0)
+        player = make_tank(2, "player", cell_center((5, 2)))
+        enemy.path = [(3, 2), (4, 2)]
+        enemy.goal = (4, 2)
+        enemy.plan_timer = 0.0
+        enemy.fire_timer = 1.0
+        ai, _ = self.make_ai(player, [enemy])
+        replans = []
+        original_plan_path = ai.plan_path
+
+        def record_replan(tank: Tank) -> None:
+            replans.append(tank.tank_id)
+            original_plan_path(tank)
+
+        ai.plan_path = record_replan
+
+        ai.update_enemy(enemy, 1 / 60)
+
+        self.assertEqual(replans, [])
+
+    def test_successful_detour_keeps_direction_for_several_frames(self) -> None:
+        enemy = make_tank(1, "enemy", Vec2(78, 150), speed=180.0)
+        player = make_tank(2, "player", cell_center((3, 2)))
+        enemy.path = [(0, 2)]
+        enemy.goal = (0, 2)
+        enemy.plan_timer = 1.0
+        enemy.fire_timer = 1.0
+        ai, _ = self.make_ai(player, [enemy])
+
+        ai.update_enemy(enemy, 1 / 30)
+        first_direction = enemy.velocity.normalize()
+        first_timer = enemy.detour_timer
+        ai.update_enemy(enemy, 1 / 30)
+
+        self.assertGreater(first_timer, 0)
+        self.assertGreater(enemy.detour_timer, 0)
+        self.assertGreater(first_direction.dot(enemy.velocity.normalize()), 0.99)
+
+    def test_stalled_tanks_in_same_cell_form_a_stable_queue(self) -> None:
+        leader = make_tank(1, "enemy", Vec2(493, 522), speed=58.0)
+        follower = make_tank(2, "enemy", Vec2(527, 522), speed=58.0)
+        player = make_tank(3, "player", cell_center((1, 1)))
+        leader.stationary_timer = 0.15
+        follower.stationary_timer = 0.15
+        ai, _ = self.make_ai(player, [leader, follower])
+        intended = Vec2(0, 1)
+
+        leader_movement = ai.coordinate_crowded_cell(leader, intended, 1 / 60)
+        follower_movement = ai.coordinate_crowded_cell(follower, intended, 1 / 60)
+
+        self.assertGreater(leader_movement.x, 0)
+        self.assertGreater(follower_movement.x, 0)
+        self.assertGreater(follower.detour_timer, 0)
+
+    def test_full_speed_back_and_forth_counts_as_no_net_progress(self) -> None:
+        enemy = make_tank(1, "enemy", Vec2(300, 300), speed=180.0)
+        first = enemy.position.copy()
+        second = first + Vec2(6, 0)
+
+        for frame in range(31):
+            enemy.position = first.copy() if frame % 2 == 0 else second.copy()
+            EnemyAISystem.track_movement_progress(enemy, 1 / 60)
+
+        self.assertGreaterEqual(enemy.net_stuck_timer, 0.45)
+
+    def test_zero_dt_does_not_count_as_stuck_time(self) -> None:
+        enemy = make_tank(1, "enemy", Vec2(300, 300), speed=58.0)
+        EnemyAISystem.track_movement_progress(enemy, 1 / 60)
+        timer = enemy.net_stuck_timer
+
+        for _ in range(60):
+            EnemyAISystem.track_movement_progress(enemy, 0.0)
+
+        self.assertEqual(enemy.net_stuck_timer, timer)
+
+    def test_new_mine_invalidates_a_route_that_crosses_its_danger_zone(self) -> None:
+        enemy = make_tank(1, "enemy", cell_center((2, 2)), speed=58.0)
+        player = make_tank(2, "player", cell_center((8, 2)))
+        enemy.path = [(3, 2), (4, 2), (5, 2)]
+        enemy.goal = (5, 2)
+        enemy.plan_timer = 0.0
+        enemy.fire_timer = 1.0
+        ai, _ = self.make_ai(player, [enemy])
+        ai.game.mines = [Mine(cell_center((5, 2)), owner_id=99, team="player")]
+        replans = []
+        original_plan_path = ai.plan_path
+
+        def record_replan(tank: Tank) -> None:
+            replans.append(tank.tank_id)
+            original_plan_path(tank)
+
+        ai.plan_path = record_replan
+
+        ai.update_enemy(enemy, 1 / 60)
+
+        self.assertEqual(replans, [enemy.tank_id])
+
+    def test_new_mine_also_invalidates_an_existing_escape_route(self) -> None:
+        enemy = make_tank(1, "enemy", cell_center((2, 2)), speed=58.0)
+        player = make_tank(2, "player", cell_center((8, 2)))
+        enemy.path = [(3, 2), (4, 2), (5, 2)]
+        enemy.goal = (5, 2)
+        enemy.plan_timer = 0.0
+        enemy.fire_timer = 1.0
+        enemy.escaping_mines = True
+        ai, _ = self.make_ai(player, [enemy])
+        ai.game.mines = [
+            Mine(enemy.position.copy(), owner_id=98, team="player"),
+            Mine(cell_center((5, 2)), owner_id=99, team="player"),
+        ]
+        replans = []
+        original_plan_mine_escape = ai.plan_mine_escape
+
+        def record_replan(tank: Tank) -> None:
+            replans.append(tank.tank_id)
+            original_plan_mine_escape(tank)
+
+        ai.plan_mine_escape = record_replan
+
+        ai.update_enemy(enemy, 1 / 60)
+
+        self.assertEqual(replans, [enemy.tank_id])
+
+    def test_crowded_cell_coordination_does_not_override_mine_escape(self) -> None:
+        enemy = make_tank(1, "enemy", Vec2(300, 300), speed=58.0)
+        ally = make_tank(2, "enemy", Vec2(320, 300), speed=58.0)
+        player = make_tank(3, "player", Vec2(800, 500))
+        enemy.net_stuck_timer = 0.15
+        enemy.fire_timer = 1.0
+        ai, _ = self.make_ai(player, [enemy, ally])
+        ai.game.mines = [Mine(Vec2(400, 300), owner_id=99, team="player")]
+
+        def reject_coordination(tank: Tank, movement: Vec2, dt: float) -> Vec2:
+            raise AssertionError("Mine escape must take priority")
+
+        ai.coordinate_crowded_cell = reject_coordination
+
+        ai.update_enemy(enemy, 1 / 60)
+
+    def test_ally_cannot_push_endangered_tank_towards_mine(self) -> None:
+        ally = make_tank(1, "enemy", Vec2(276, 300), speed=58.0)
+        endangered = make_tank(2, "enemy", Vec2(310, 300), speed=58.0)
+        player = make_tank(3, "player", Vec2(800, 500))
+        ai, _ = self.make_ai(player, [ally, endangered])
+        ai.game.mines = [Mine(Vec2(400, 300), owner_id=99, team="player")]
+
+        unsafe_push = ai.move_enemy(ally, Vec2(1, 0))
+        safe_escape = ai.move_enemy(endangered, Vec2(-1, 0))
+
+        self.assertEqual(unsafe_push, Vec2())
+        self.assertLess(safe_escape.x, 0)
+
+    def test_zero_dt_preserves_velocity_and_local_stuck_timer(self) -> None:
+        enemy = make_tank(1, "enemy", cell_center((2, 2)), speed=58.0)
+        player = make_tank(2, "player", cell_center((8, 2)))
+        enemy.path = [(3, 2)]
+        enemy.goal = (3, 2)
+        enemy.plan_timer = 1.0
+        enemy.fire_timer = 1.0
+        enemy.velocity = Vec2(0, 58)
+        enemy.stuck_timer = 0.34
+        ai, _ = self.make_ai(player, [enemy])
+
+        ai.update_enemy(enemy, 0.0)
+
+        self.assertEqual(enemy.velocity, Vec2(0, 58))
+        self.assertEqual(enemy.stuck_timer, 0.34)
+
 
 class FinalShotSafetyTests(unittest.TestCase):
     def test_final_check_uses_real_turret_angle(self) -> None:
@@ -395,13 +580,13 @@ class FinalShotSafetyTests(unittest.TestCase):
         self.assertEqual(combat.traced_angles, [])
         self.assertTrue(enemy.shot_ready)
 
-    def test_dark_green_has_shorter_shot_think_delay_than_dark_gray(self) -> None:
+    def test_dark_green_has_shorter_fire_delay_than_dark_gray(self) -> None:
         catalog = load_enemy_catalog()
-        green_delay = SHOT_THINK_DELAYS[
-            catalog["dark_green"]["tiempo_pensar_disparo"]
+        green_delay = FIRE_RATE_DELAYS[
+            catalog["dark_green"]["cadencia_disparo"]
         ]
-        gray_delay = SHOT_THINK_DELAYS[
-            catalog["dark_gray"]["tiempo_pensar_disparo"]
+        gray_delay = FIRE_RATE_DELAYS[
+            catalog["dark_gray"]["cadencia_disparo"]
         ]
 
         self.assertLess(green_delay, gray_delay)

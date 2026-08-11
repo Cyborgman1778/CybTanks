@@ -29,7 +29,7 @@ from .config import (
 )
 from .enemy_ai import EnemyAISystem
 from .geometry import clamp
-from .levels import enemy_layout, map_layout
+from .levels import enemy_layout, map_layout, shielded_dark_gray_count
 from .mines import MineSystem
 from .models import Bullet, ExplosionEffect, Mine, Particle, Tank, TrackMark, Vec2
 from .renderer import Renderer
@@ -81,6 +81,7 @@ class Game:
         row: int,
         index: int = 0,
         kind: str = "player",
+        shield_hits: int = 0,
     ) -> Tank:
         is_player = team == "player"
         if is_player:
@@ -134,6 +135,7 @@ class Game:
             ricochet_accuracy=ricochet_accuracy,
             ricochet_success_rate=ricochet_success_rate,
             self_safe=self_safe,
+            shield_hits=shield_hits,
             fire_timer=enemy_initial_fire_delay(kind, index) if not is_player else 0.0,
             mine_timer=1.4 + index * 0.25,
             plan_timer=index * 0.18,
@@ -164,10 +166,22 @@ class Game:
         self.wrecks = []
         self.player = self.make_tank("player", 1, 1)
 
-        self.enemies = [
-            self.make_tank("enemy", col, row, index, kind)
-            for index, (kind, (col, row)) in enumerate(enemy_layout(self.level))
-        ]
+        self.enemies = []
+        shielded_remaining = shielded_dark_gray_count(self.level)
+        for index, (kind, (col, row)) in enumerate(enemy_layout(self.level)):
+            shield_hits = int(kind == "dark_gray" and shielded_remaining > 0)
+            if shield_hits:
+                shielded_remaining -= 1
+            self.enemies.append(
+                self.make_tank(
+                    "enemy",
+                    col,
+                    row,
+                    index,
+                    kind,
+                    shield_hits=shield_hits,
+                )
+            )
         self.mouse_world = self.player.position + Vec2(TILE * 2, 0)
 
     def next_level(self) -> None:
@@ -205,7 +219,13 @@ class Game:
             enemy.plan_timer = 0
             enemy.aim_timer = 0
             enemy.shot_ready = False
+            enemy.shield_flash = 0
             enemy.stuck_timer = 0
+            enemy.net_stuck_timer = 0
+            enemy.stationary_timer = 0
+            enemy.detour_timer = 0
+            enemy.progress_anchor = None
+            enemy.last_frame_position = None
             enemy.avoid_cell = None
             enemy.avoid_timer = 0
             enemy.escaping_mines = False
@@ -392,6 +412,7 @@ class Game:
         for tank in self.all_tanks():
             tank.cooldown = max(0.0, tank.cooldown - dt)
             tank.shot_think_timer = max(0.0, tank.shot_think_timer - dt)
+            tank.shield_flash = max(0.0, tank.shield_flash - dt)
 
         if self.state == "playing":
             starting_positions = {
