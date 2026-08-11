@@ -46,6 +46,12 @@ class AIProfile:
     ricochet_error_max_degrees: float
     ricochet_error_attempts: int
     crowd_wait_time: float
+    dodge_prediction_time: float
+    dodge_margin_px: float
+    dodge_commit_time: float
+    dodge_cooldown: float
+    dodge_speed_multiplier: float
+    dodge_direction_commitment: float
     scan_speed: float
     scan_arc_degrees: float
     unpredictability: float
@@ -73,6 +79,7 @@ class GlobalAIConfig:
     alert_cooldown: float
     sound_event_lifetime: float
     max_sound_events: int
+    omniscient_player_tracking: bool
     near_lod_distance_tiles: float
     far_lod_distance_tiles: float
     threat_horizon: float
@@ -83,6 +90,7 @@ class GlobalAIConfig:
     state_hysteresis: float
     guard_patrol_radius_tiles: int
     direct_aim_offsets_px: tuple[float, ...]
+    dodge_candidate_angles_degrees: tuple[float, ...]
     route_occupied_penalty: float
     route_ally_path_penalty: float
     route_reserved_goal_penalty: float
@@ -171,6 +179,11 @@ def _validate_profile(profile_id: str, profile: AIProfile) -> None:
         profile.ricochet_error_min_degrees,
         profile.ricochet_error_max_degrees,
         profile.crowd_wait_time,
+        profile.dodge_prediction_time,
+        profile.dodge_margin_px,
+        profile.dodge_commit_time,
+        profile.dodge_cooldown,
+        profile.dodge_speed_multiplier,
         profile.scan_speed,
         profile.scan_arc_degrees,
     )
@@ -182,6 +195,7 @@ def _validate_profile(profile_id: str, profile: AIProfile) -> None:
         profile.flank_preference,
         profile.retreat_threshold,
         profile.unpredictability,
+        profile.dodge_direction_commitment,
     )
     if any(not 0 <= value <= 1 for value in unit_values):
         raise ValueError(f"Utility weight outside [0, 1] in AI profile {profile_id!r}")
@@ -227,6 +241,9 @@ def _global_from_data(data: dict[str, Any]) -> GlobalAIConfig:
         raise ValueError(f"Missing global AI fields: {sorted(missing)}")
     values = dict(data)
     values["direct_aim_offsets_px"] = tuple(float(value) for value in values["direct_aim_offsets_px"])
+    values["dodge_candidate_angles_degrees"] = tuple(
+        float(value) for value in values["dodge_candidate_angles_degrees"]
+    )
     values["sound_ranges_tiles"] = {
         str(kind): float(radius) for kind, radius in values["sound_ranges_tiles"].items()
     }
@@ -251,6 +268,10 @@ def _global_from_data(data: dict[str, Any]) -> GlobalAIConfig:
         raise ValueError("AI sound ranges must be positive")
     if not config.direct_aim_offsets_px:
         raise ValueError("AI direct-aim offsets cannot be empty")
+    if not config.dodge_candidate_angles_degrees:
+        raise ValueError("AI dodge candidate angles cannot be empty")
+    if not isinstance(config.omniscient_player_tracking, bool):
+        raise ValueError("AI omniscient-player tracking must be boolean")
     if not 0 <= config.alert_awareness <= 1:
         raise ValueError("AI alert awareness must be in [0, 1]")
     if not 0 < config.near_lod_distance_tiles < config.far_lod_distance_tiles:

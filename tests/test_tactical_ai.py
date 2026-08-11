@@ -149,6 +149,461 @@ class PerceptionTests(unittest.TestCase):
         self.assertGreater(far_enemy.ai.sensor_timer, near_enemy.ai.sensor_timer)
 
 
+class OmniscientTrackingTests(unittest.TestCase):
+    def test_enemy_tracks_exact_player_position_through_walls_every_frame(self) -> None:
+        settings = load_ai_settings()
+        world = open_world()
+        tiles = [row[:] for row in world.tiles]
+        tiles[6][6] = 1
+        world.reset(tuple(tuple(row) for row in tiles))
+        enemy = make_tank(1, "enemy", (4, 6), speed=58.0)
+        player = make_tank(2, "player", (8, 6))
+        perception = PerceptionSystem(world, settings)
+        profile = settings.profile_for(enemy.kind, enemy.intelligence)
+
+        first = perception.update(enemy, player, profile, 0.0)
+        player.position = cell_center((9, 7))
+        enemy.ai.sensor_timer = 10.0
+        second = perception.update(enemy, player, profile, 1 / 60)
+
+        self.assertFalse(first.target_visible)
+        self.assertTrue(first.remembered_contact)
+        self.assertTrue(first.can_engage)
+        self.assertEqual(second.target_position, player.position)
+        self.assertEqual(enemy.ai.last_known_position, player.position)
+
+    def test_omniscient_enemy_uses_combat_utility_without_visual_contact(self) -> None:
+        settings = load_ai_settings()
+        world = open_world()
+        tiles = [row[:] for row in world.tiles]
+        tiles[6][6] = 1
+        world.reset(tuple(tuple(row) for row in tiles))
+        enemy = make_tank(1, "enemy", (4, 6), speed=58.0)
+        player = make_tank(2, "player", (8, 6))
+        game = SimpleNamespace(world=world, player=player, bullets=[], mines=[])
+        perception_system = PerceptionSystem(world, settings)
+        profile = settings.profile_for(enemy.kind, enemy.intelligence)
+        snapshot = perception_system.update(enemy, player, profile, 0.0)
+
+        decision = UtilityDecisionSystem(game, settings).update(
+            enemy,
+            profile,
+            snapshot,
+            0.0,
+        )
+
+        self.assertIn(decision.state, {"attack", "flank", "cover", "retreat"})
+        self.assertEqual(decision.target_position, player.position)
+
+    def test_cached_decision_still_receives_exact_subcell_player_position(self) -> None:
+        settings = load_ai_settings()
+        world = open_world()
+        enemy = make_tank(1, "enemy", (4, 6), speed=58.0)
+        player = make_tank(2, "player", (8, 6))
+        game = SimpleNamespace(world=world, player=player, bullets=[], mines=[])
+        perception_system = PerceptionSystem(world, settings)
+        decision_system = UtilityDecisionSystem(game, settings)
+        profile = settings.profile_for(enemy.kind, enemy.intelligence)
+        first_snapshot = perception_system.update(enemy, player, profile, 0.0)
+        decision_system.update(enemy, profile, first_snapshot, 0.0)
+        player.position += Vec2(10, 0)
+        enemy.ai.sensor_timer = 10.0
+        enemy.ai.decision_timer = 10.0
+
+        second_snapshot = perception_system.update(enemy, player, profile, 1 / 60)
+        second_decision = decision_system.update(
+            enemy,
+            profile,
+            second_snapshot,
+            1 / 60,
+        )
+
+        self.assertEqual(second_decision.target_position, player.position)
+        self.assertEqual(enemy.ai.navigation_target, player.position)
+
+
+class ProjectileDodgeTests(unittest.TestCase):
+    def make_ai(
+        self,
+        enemy: Tank,
+        player: Tank,
+        bullet: Bullet,
+        world: World | None = None,
+    ) -> EnemyAISystem:
+        world = world or open_world()
+        game = SimpleNamespace(
+            world=world,
+            player=player,
+            enemies=[enemy],
+            bullets=[bullet],
+            mines=[],
+            state="playing",
+        )
+        game.all_tanks = lambda: [player, enemy]
+        game.combat = CombatSystem(game)
+        return EnemyAISystem(game)
+
+    def test_mobile_enemy_dodges_a_direct_incoming_bullet_sideways(self) -> None:
+        enemy = make_tank(1, "enemy", (5, 5), speed=58.0)
+        player = make_tank(2, "player", (12, 5))
+        bullet = Bullet(
+            enemy.position - Vec2(120, 0),
+            Vec2(230, 0),
+            "player",
+            player.tank_id,
+            (0, 0, 0),
+            max_bounces=0,
+        )
+        ai = self.make_ai(enemy, player, bullet)
+
+        movement = ai.dodge_incoming_fire(enemy, 1 / 60)
+
+        self.assertGreater(movement.length(), 0.0)
+        self.assertGreater(abs(movement.y), abs(movement.x))
+        self.assertGreater(enemy.ai.dodge_timer, 0.0)
+
+    def test_enemy_predicts_and_dodges_a_future_ricochet(self) -> None:
+        world = open_world()
+        enemy = make_tank(1, "enemy", (3, 5), speed=58.0)
+        player = make_tank(2, "player", (12, 5))
+        bullet = Bullet(
+            Vec2(100, enemy.position.y),
+            Vec2(-230, 0),
+            "player",
+            player.tank_id,
+            (0, 0, 0),
+            max_bounces=1,
+        )
+        ai = self.make_ai(enemy, player, bullet, world)
+
+        movement = ai.dodge_incoming_fire(enemy, 1 / 60)
+
+        self.assertGreater(movement.length(), 0.0)
+        self.assertGreater(abs(movement.y), abs(movement.x))
+
+    def test_dodge_is_applied_by_the_enemy_update_instead_of_route_motion(self) -> None:
+        enemy = make_tank(1, "enemy", (5, 5), speed=58.0)
+        player = make_tank(2, "player", (12, 5))
+        bullet = Bullet(
+            enemy.position - Vec2(120, 0),
+            Vec2(230, 0),
+            "player",
+            player.tank_id,
+            (0, 0, 0),
+            max_bounces=0,
+        )
+        ai = self.make_ai(enemy, player, bullet)
+        enemy.path = [(6, 5)]
+        enemy.goal = (6, 5)
+        enemy.plan_timer = 1.0
+        enemy.fire_timer = 10.0
+        start = enemy.position.copy()
+
+        ai.update_enemy(enemy, 1 / 60)
+
+        self.assertGreater(abs(enemy.position.y - start.y), abs(enemy.position.x - start.x))
+
+    def test_dodge_selects_the_open_side_when_one_side_is_a_wall(self) -> None:
+        enemy = make_tank(1, "enemy", (5, 1), speed=58.0)
+        enemy.position.y = 77.1
+        player = make_tank(2, "player", (12, 1))
+        bullet = Bullet(
+            enemy.position - Vec2(120, 0),
+            Vec2(230, 0),
+            "player",
+            player.tank_id,
+            (0, 0, 0),
+            max_bounces=0,
+        )
+        ai = self.make_ai(enemy, player, bullet)
+
+        movement = ai.dodge_incoming_fire(enemy, 1 / 60)
+
+        self.assertGreater(movement.y, 0.0)
+        self.assertFalse(ai.game.world.tank_touches_wall(enemy.position + movement))
+
+    def test_enemy_does_not_dodge_a_bullet_destroyed_before_reaching_it(self) -> None:
+        world = open_world()
+        enemy = make_tank(1, "enemy", (3, 5), speed=58.0)
+        player = make_tank(2, "player", (12, 5))
+        bullet = Bullet(
+            Vec2(80, enemy.position.y),
+            Vec2(-230, 0),
+            "player",
+            player.tank_id,
+            (0, 0, 0),
+            max_bounces=0,
+        )
+        ai = self.make_ai(enemy, player, bullet, world)
+
+        movement = ai.dodge_incoming_fire(enemy, 1 / 60)
+
+        self.assertEqual(movement, Vec2())
+
+    def test_stationary_archetype_respects_zero_movement_speed(self) -> None:
+        enemy = make_tank(1, "enemy", (5, 5), speed=0.0)
+        player = make_tank(2, "player", (12, 5))
+        bullet = Bullet(
+            enemy.position - Vec2(120, 0),
+            Vec2(230, 0),
+            "player",
+            player.tank_id,
+            (0, 0, 0),
+            max_bounces=0,
+        )
+        ai = self.make_ai(enemy, player, bullet)
+
+        self.assertEqual(ai.dodge_incoming_fire(enemy, 1 / 60), Vec2())
+
+    def test_expired_dodge_direction_cannot_bias_a_new_threat(self) -> None:
+        enemy = make_tank(1, "enemy", (5, 5), speed=58.0)
+        player = make_tank(2, "player", (12, 5))
+        bullet = Bullet(
+            enemy.position - Vec2(120, 0),
+            Vec2(230, 0),
+            "player",
+            player.tank_id,
+            (0, 0, 0),
+            max_bounces=0,
+        )
+        ai = self.make_ai(enemy, player, bullet)
+        enemy.ai.dodge_direction = Vec2(-1, 0.1).normalize()
+        enemy.ai.dodge_timer = 0.0
+
+        movement = ai.dodge_incoming_fire(enemy, 1 / 60)
+
+        self.assertGreater(abs(movement.y), abs(movement.x))
+
+    def test_dodge_resets_the_real_navigation_stuck_state(self) -> None:
+        enemy = make_tank(1, "enemy", (5, 5), speed=58.0)
+        player = make_tank(2, "player", (12, 5))
+        bullet = Bullet(
+            enemy.position - Vec2(120, 0),
+            Vec2(230, 0),
+            "player",
+            player.tank_id,
+            (0, 0, 0),
+            max_bounces=0,
+        )
+        ai = self.make_ai(enemy, player, bullet)
+        enemy.net_stuck_timer = ai.profile_for(enemy).net_stuck_timeout - 0.01
+
+        ai.dodge_incoming_fire(enemy, 1 / 60)
+
+        self.assertEqual(enemy.net_stuck_timer, 0.0)
+        self.assertEqual(enemy.progress_anchor, enemy.position)
+
+    def test_update_checks_dodge_before_abandoning_an_almost_stuck_route(self) -> None:
+        enemy = make_tank(1, "enemy", (5, 5), speed=58.0)
+        player = make_tank(2, "player", (12, 5))
+        bullet = Bullet(
+            enemy.position - Vec2(120, 0),
+            Vec2(230, 0),
+            "player",
+            player.tank_id,
+            (0, 0, 0),
+            max_bounces=0,
+        )
+        ai = self.make_ai(enemy, player, bullet)
+        enemy.path = [(6, 5)]
+        enemy.goal = (6, 5)
+        enemy.plan_timer = 1.0
+        enemy.fire_timer = 10.0
+        enemy.net_stuck_timer = ai.profile_for(enemy).net_stuck_timeout - 0.01
+
+        ai.update_enemy(enemy, 1 / 60)
+
+        self.assertEqual(enemy.route_variant, 0)
+        self.assertIsNone(enemy.avoid_cell)
+        self.assertEqual(enemy.net_stuck_timer, 0.0)
+
+    def test_imminent_shot_bypasses_cooldown_when_waiting_would_be_fatal(self) -> None:
+        enemy = make_tank(1, "enemy", (5, 5), speed=58.0)
+        player = make_tank(2, "player", (12, 5))
+        bullet = Bullet(
+            enemy.position - Vec2(120, 0),
+            Vec2(230, 0),
+            "player",
+            player.tank_id,
+            (0, 0, 0),
+            max_bounces=0,
+        )
+        ai = self.make_ai(enemy, player, bullet)
+        enemy.ai.dodge_cooldown = ai.profile_for(enemy).dodge_cooldown
+
+        movement = ai.dodge_incoming_fire(enemy, 1 / 60)
+
+        self.assertGreater(movement.length(), 0.0)
+
+    def test_close_player_ricochet_that_will_disintegrate_is_not_dodged(self) -> None:
+        world = open_world()
+        enemy = make_tank(1, "enemy", (3, 5), speed=58.0)
+        player = make_tank(2, "player", (12, 5))
+        bullet = Bullet(
+            Vec2(87, enemy.position.y),
+            Vec2(-230, 0),
+            "player",
+            player.tank_id,
+            (0, 0, 0),
+            max_bounces=1,
+        )
+        ai = self.make_ai(enemy, player, bullet, world)
+
+        self.assertEqual(ai.dodge_incoming_fire(enemy, 1 / 60), Vec2())
+
+    def test_bullet_absorbed_by_another_tank_does_not_trigger_dodge(self) -> None:
+        world = open_world()
+        enemy = make_tank(1, "enemy", (8, 5), speed=58.0)
+        blocker = make_tank(3, "enemy", (5, 5))
+        player = make_tank(2, "player", (12, 5))
+        bullet = Bullet(
+            cell_center((3, 5)),
+            Vec2(230, 0),
+            "player",
+            player.tank_id,
+            (0, 0, 0),
+            max_bounces=0,
+        )
+        game = SimpleNamespace(
+            world=world,
+            player=player,
+            enemies=[blocker, enemy],
+            bullets=[bullet],
+            mines=[],
+            state="playing",
+        )
+        game.all_tanks = lambda: [player, blocker, enemy]
+        game.combat = CombatSystem(game)
+        ai = EnemyAISystem(game)
+
+        self.assertEqual(ai.dodge_incoming_fire(enemy, 1 / 60), Vec2())
+
+    def test_mobile_tank_is_not_assumed_to_remain_a_permanent_bullet_shield(self) -> None:
+        world = open_world()
+        enemy = make_tank(1, "enemy", (8, 5), speed=58.0)
+        mobile_blocker = make_tank(3, "enemy", (6, 5), speed=58.0)
+        player = make_tank(2, "player", (12, 5))
+        bullet = Bullet(
+            Vec2(320, enemy.position.y),
+            Vec2(230, 0),
+            "player",
+            player.tank_id,
+            (0, 0, 0),
+            max_bounces=0,
+        )
+        game = SimpleNamespace(
+            world=world,
+            player=player,
+            enemies=[mobile_blocker, enemy],
+            bullets=[bullet],
+            mines=[],
+            state="playing",
+        )
+        game.all_tanks = lambda: [player, mobile_blocker, enemy]
+        game.combat = CombatSystem(game)
+        ai = EnemyAISystem(game)
+
+        self.assertGreater(ai.dodge_incoming_fire(enemy, 1 / 60).length(), 0.0)
+
+    def test_bullet_absorbed_by_a_mine_does_not_trigger_dodge(self) -> None:
+        world = open_world()
+        enemy = make_tank(1, "enemy", (8, 5), speed=58.0)
+        player = make_tank(2, "player", (12, 5))
+        bullet = Bullet(
+            cell_center((3, 5)),
+            Vec2(230, 0),
+            "player",
+            player.tank_id,
+            (0, 0, 0),
+            max_bounces=0,
+        )
+        mine = Mine(cell_center((6, 5)), owner_id=99, team="enemy")
+        game = SimpleNamespace(
+            world=world,
+            player=player,
+            enemies=[enemy],
+            bullets=[bullet],
+            mines=[mine],
+            state="playing",
+        )
+        game.all_tanks = lambda: [player, enemy]
+        game.combat = CombatSystem(game)
+        ai = EnemyAISystem(game)
+
+        self.assertEqual(ai.dodge_incoming_fire(enemy, 1 / 60), Vec2())
+
+    def test_bullet_destroyed_by_another_bullet_does_not_trigger_dodge(self) -> None:
+        world = open_world()
+        enemy = make_tank(1, "enemy", (8, 5), speed=58.0)
+        player = make_tank(2, "player", (12, 5))
+        hostile = Bullet(
+            cell_center((3, 5)),
+            Vec2(230, 0),
+            "player",
+            player.tank_id,
+            (0, 0, 0),
+            max_bounces=0,
+        )
+        interceptor = Bullet(
+            cell_center((6, 5)),
+            Vec2(-230, 0),
+            "enemy",
+            99,
+            (0, 0, 0),
+            max_bounces=0,
+        )
+        game = SimpleNamespace(
+            world=world,
+            player=player,
+            enemies=[enemy],
+            bullets=[hostile, interceptor],
+            mines=[],
+            state="playing",
+        )
+        game.all_tanks = lambda: [player, enemy]
+        game.combat = CombatSystem(game)
+        ai = EnemyAISystem(game)
+
+        self.assertEqual(ai.dodge_incoming_fire(enemy, 1 / 60), Vec2())
+
+    def test_interceptor_blocked_by_wall_cannot_hide_a_real_threat(self) -> None:
+        world = open_world()
+        tiles = [row[:] for row in world.tiles]
+        tiles[6][7] = 1
+        world.reset(tuple(tuple(row) for row in tiles))
+        enemy = make_tank(1, "enemy", (8, 5), speed=58.0)
+        player = make_tank(2, "player", (12, 5))
+        hostile = Bullet(
+            Vec2(320, enemy.position.y),
+            Vec2(230, 0),
+            "player",
+            player.tank_id,
+            (0, 0, 0),
+            max_bounces=0,
+        )
+        blocked_interceptor = Bullet(
+            Vec2(450, 460),
+            Vec2(0, -230),
+            "enemy",
+            99,
+            (0, 0, 0),
+            max_bounces=0,
+        )
+        game = SimpleNamespace(
+            world=world,
+            player=player,
+            enemies=[enemy],
+            bullets=[hostile, blocked_interceptor],
+            mines=[],
+            state="playing",
+        )
+        game.all_tanks = lambda: [player, enemy]
+        game.combat = CombatSystem(game)
+        ai = EnemyAISystem(game)
+
+        self.assertGreater(ai.dodge_incoming_fire(enemy, 1 / 60).length(), 0.0)
+
+
 class SquadAndDecisionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.settings = load_ai_settings()

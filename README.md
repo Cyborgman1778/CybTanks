@@ -48,7 +48,9 @@ py main.py
 
 Cada enemigo mantiene una memoria independiente y decide mediante Utility AI entre vigilancia, investigación, búsqueda, ataque, flanqueo, cobertura, retirada y evasión. La decisión considera visibilidad real, distancia, proyectiles entrantes, exposición, rol de escuadrón, agresividad y estado del escudo. Como el juego no tiene salud parcial, la retirada se activa por amenaza alta y por pérdida de una protección disponible, sin cambiar la regla existente de muerte de un impacto.
 
-La vista usa rango, cono, tiempo de detección progresivo, reacción y pérdida gradual de conciencia. Al perder contacto, el enemigo investiga la última posición conocida durante un tiempo limitado. Disparos, minas, explosiones y destrucciones generan eventos auditivos posicionales; las paredes sólidas y rompibles atenúan esos sonidos de forma distinta.
+Con `omniscient_player_tracking=true`, todos los enemigos reciben la posición exacta y actual del jugador cada frame, incluso a través de paredes. La visibilidad física se calcula por separado y sigue condicionando líneas de tiro, exposición y calidad de las coberturas, por lo que conocer la posición no permite atravesar obstáculos con proyectiles. El sistema de vista, memoria y oído permanece disponible para evaluación táctica y para desactivar este modo desde datos si se diseña otra variante de juego.
+
+Los enemigos móviles proyectan las trayectorias futuras de las balas hostiles, incluidos sus rebotes, y estiman tiempo y distancia de intercepción. Ante un impacto probable eligen una esquiva lateral continua, mantienen la dirección para no oscilar y descartan maniobras que choquen con paredes, aliados, minas o fuego amigo. Un arquetipo con velocidad `stopped` conserva rigurosamente su inmovilidad configurada.
 
 Los enemigos cercanos comparten contactos, reciben roles de asalto, apoyo o flanqueo y reservan un número limitado de cupos de ataque. Las reservas de objetivos, las penalizaciones de rutas y la prevención continua de fuego amigo evitan que todas las unidades ocupen o disparen por el mismo corredor.
 
@@ -56,10 +58,10 @@ La navegación táctica evalúa coberturas dinámicas, puntos con posibilidad de
 
 Los parámetros principales de `data/ai_profiles.json` incluyen:
 
-- percepción: rango visual y auditivo, FOV, detección, reacción, memoria y frecuencia sensorial;
+- percepción: seguimiento omnisciente, rango visual y auditivo, FOV, detección, reacción, memoria y frecuencia sensorial;
 - decisión: agresividad, preferencia de cobertura/flanqueo, umbral de retirada e imprevisibilidad;
 - movimiento: distancia ideal, radio de búsqueda, tiempos de replanificación, giro y detección de atasco;
-- combate: tolerancia y frecuencia de puntería, candidatos y error de rebote, minas y cadencia inicial;
+- combate: tolerancia y frecuencia de puntería, candidatos y error de rebote, predicción y compromiso de esquiva, minas y cadencia inicial;
 - escuadrón: roles, alcance de comunicación, atacantes simultáneos y duración de reservas;
 - rendimiento: LOD por distancia y presupuestos máximos de rutas y soluciones de disparo por frame.
 

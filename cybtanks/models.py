@@ -35,6 +35,9 @@ class EnemyMemory:
     last_sound_event_id: int = 0
     threat: float = 0.0
     lod_factor: float = 0.0
+    dodge_timer: float = 0.0
+    dodge_cooldown: float = 0.0
+    dodge_direction: Vec2 = field(default_factory=Vec2)
 
 
 @dataclass

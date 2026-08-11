@@ -9,6 +9,7 @@ from .config import (
     BOARD_WIDTH,
     BULLET_RADIUS,
     FIRE_RATE_DELAYS,
+    MINE_COLLISION_RADIUS,
     PLAYER_MIN_RICOCHET_DISTANCE,
     SHIELD_FLASH_DURATION,
     SHOT_THINK_DELAYS,
@@ -41,7 +42,7 @@ class CombatSystem:
         self._projectile_path_cache: dict[
             tuple[int, float],
             tuple[
-                tuple[float, float, float, float, int],
+                tuple[float, float, float, float, int, float, float],
                 list[tuple[Vec2, Vec2]],
             ],
         ] = {}
@@ -265,6 +266,155 @@ class CombatSystem:
 
         return trace
 
+    @staticmethod
+    def _segment_circle_entry_ratio(
+        start: Vec2,
+        end: Vec2,
+        center: Vec2,
+        radius: float,
+    ) -> float | None:
+        segment = end - start
+        length_squared = segment.length_squared()
+        if length_squared <= 0.000_001:
+            return 0.0 if start.distance_squared_to(center) <= radius**2 else None
+        projection = clamp((center - start).dot(segment) / length_squared, 0.0, 1.0)
+        closest = start + segment * projection
+        perpendicular_squared = closest.distance_squared_to(center)
+        if perpendicular_squared > radius**2:
+            return None
+        half_chord = math.sqrt(max(0.0, radius**2 - perpendicular_squared))
+        return clamp(
+            projection - half_chord / math.sqrt(length_squared),
+            0.0,
+            1.0,
+        )
+
+    def _projected_bullet_collision_ratio(
+        self,
+        bullet: Bullet,
+        start: Vec2,
+        end: Vec2,
+        start_time: float,
+        end_time: float,
+    ) -> float | None:
+        duration = end_time - start_time
+        if duration <= 0.000_001:
+            return None
+        segment_velocity = (end - start) / duration
+        earliest: float | None = None
+        for other in getattr(self.game, "bullets", ()):
+            if other is bullet or not other.alive or other.velocity.length_squared() == 0:
+                continue
+            relative_start = start - (other.position + other.velocity * start_time)
+            relative_velocity = segment_velocity - other.velocity
+            relative_speed_squared = relative_velocity.length_squared()
+            local_time = (
+                clamp(
+                    -relative_start.dot(relative_velocity) / relative_speed_squared,
+                    0.0,
+                    duration,
+                )
+                if relative_speed_squared > 0.000_001
+                else 0.0
+            )
+            collision_time = start_time + local_time
+            first_position = start + segment_velocity * local_time
+            other_position = other.position + other.velocity * collision_time
+            if not self.game.world.clear_segment(
+                other.position,
+                other_position,
+                BULLET_RADIUS,
+            ):
+                continue
+            first_direction = segment_velocity.normalize()
+            other_direction = other.velocity.normalize()
+            if (
+                segment_distance_squared(
+                    first_position - first_direction * 6.0,
+                    first_position + first_direction * 8.0,
+                    other_position - other_direction * 6.0,
+                    other_position + other_direction * 8.0,
+                )
+                > (BULLET_RADIUS * 2.0) ** 2
+            ):
+                continue
+            ratio = local_time / duration
+            earliest = ratio if earliest is None else min(earliest, ratio)
+        return earliest
+
+    def _clip_projectile_segments(
+        self,
+        bullet: Bullet,
+        segments: list[tuple[Vec2, Vec2, int]],
+    ) -> list[tuple[Vec2, Vec2]]:
+        speed = bullet.velocity.length()
+        if speed <= 0.0:
+            return []
+        all_tanks = getattr(self.game, "all_tanks", None)
+        tanks = (
+            all_tanks()
+            if all_tanks is not None
+            else [
+                *([self.game.player] if hasattr(self.game, "player") else []),
+                *getattr(self.game, "enemies", ()),
+            ]
+        )
+        elapsed = 0.0
+        result = []
+        for start, end, bounces in segments:
+            length = start.distance_to(end)
+            if length <= 0.000_001:
+                continue
+            duration = length / speed
+            terminal_ratio = 1.0
+            for tank in tanks:
+                if not tank.alive or tank.speed > 0.0:
+                    continue
+                collision_ratio = self._segment_circle_entry_ratio(
+                    start,
+                    end,
+                    tank.position,
+                    math.hypot(TANK_HALF, TANK_HALF) + BULLET_RADIUS,
+                )
+                if collision_ratio is None:
+                    continue
+                predicted_age = bullet.age + elapsed + collision_ratio * duration
+                if (
+                    tank.tank_id == bullet.owner_id
+                    and bounces == 0
+                    and predicted_age < 0.14
+                ):
+                    continue
+                terminal_ratio = min(terminal_ratio, collision_ratio)
+            for mine in getattr(self.game, "mines", ()):
+                if not mine.alive:
+                    continue
+                collision_ratio = self._segment_circle_entry_ratio(
+                    start,
+                    end,
+                    mine.position,
+                    MINE_COLLISION_RADIUS + BULLET_RADIUS,
+                )
+                if collision_ratio is not None:
+                    terminal_ratio = min(terminal_ratio, collision_ratio)
+            bullet_collision = self._projected_bullet_collision_ratio(
+                bullet,
+                start,
+                end,
+                elapsed,
+                elapsed + duration,
+            )
+            if bullet_collision is not None:
+                terminal_ratio = min(terminal_ratio, bullet_collision)
+
+            clipped_end = start + (end - start) * terminal_ratio
+            if start.distance_squared_to(clipped_end) > 0.000_001:
+                result.append((start, clipped_end))
+            if terminal_ratio < 1.0:
+                break
+            elapsed += duration
+        return result
+
     def projectile_path_segments(
         self,
         bullet: Bullet,
@@ -277,6 +427,8 @@ class CombatSystem:
             round(bullet.velocity.x, 3),
             round(bullet.velocity.y, 3),
             bullet.bounces,
+            round(bullet.distance_travelled, 3),
+            round(bullet.age, 3),
         )
         cached = self._projectile_path_cache.get(cache_key)
         if cached is not None and cached[0] == signature:
@@ -284,9 +436,9 @@ class CombatSystem:
         segment_start = bullet.position.copy()
         previous = segment_start
         previous_bounces = bullet.bounces
-        segments = []
+        geometric_segments: list[tuple[Vec2, Vec2, int]] = []
         max_distance = bullet.velocity.length() * horizon if horizon is not None else None
-        for position, bounces, _ in self._shot_trajectory(
+        for position, bounces, distance in self._shot_trajectory(
             bullet.position,
             bullet.velocity,
             bullet.max_bounces,
@@ -295,13 +447,24 @@ class CombatSystem:
         ):
             if bounces != previous_bounces:
                 if segment_start.distance_squared_to(previous) > 0:
-                    segments.append((segment_start, previous))
+                    geometric_segments.append(
+                        (segment_start, previous, previous_bounces)
+                    )
+                if (
+                    bullet.team == "player"
+                    and previous_bounces == 0
+                    and bullet.distance_travelled
+                    + max(0.0, distance - SHOT_TRACE_STEP)
+                    < PLAYER_MIN_RICOCHET_DISTANCE
+                ):
+                    break
                 segment_start = previous
                 previous_bounces = bounces
             previous = position
 
         if segment_start.distance_squared_to(previous) > 0:
-            segments.append((segment_start, previous))
+            geometric_segments.append((segment_start, previous, previous_bounces))
+        segments = self._clip_projectile_segments(bullet, geometric_segments)
         self._projectile_path_cache[cache_key] = (signature, segments)
         return segments
 

@@ -20,8 +20,8 @@ from .config import (
     TANK_HALF,
     TILE,
 )
-from .geometry import angle_difference, point_segment_distance_squared, turn_towards
-from .models import EnemyMemory, Tank, Vec2
+from .geometry import angle_difference, clamp, point_segment_distance_squared, turn_towards
+from .models import Bullet, EnemyMemory, Tank, Vec2
 from .world import cell_center, grid_cell
 
 if TYPE_CHECKING:
@@ -714,6 +714,215 @@ class EnemyAISystem:
                 return candidate
         return Vec2()
 
+    def _projectile_segments(
+        self,
+        bullet: Bullet,
+        horizon: float,
+    ) -> list[tuple[Vec2, Vec2]]:
+        projector = getattr(self.game.combat, "projectile_path_segments", None)
+        if projector is not None:
+            return projector(bullet, horizon)
+        return [(bullet.position, bullet.position + bullet.velocity * horizon)]
+
+    def _dodge_candidate_clearance(
+        self,
+        enemy: Tank,
+        movement: Vec2,
+        projectile_segments: list[tuple[Vec2, Vec2]],
+    ) -> float:
+        destination = enemy.position + movement
+        intermediate_positions = []
+        if abs(movement.x) > 0.000_001:
+            intermediate_positions.append(enemy.position + Vec2(movement.x, 0.0))
+        intermediate_positions.append(destination)
+        tanks = self.game.all_tanks()
+        for position in intermediate_positions:
+            if self.game.world.tank_touches_wall(position):
+                return -math.inf
+            if self.game.world.tank_touches_tank(enemy, position, tanks):
+                return -math.inf
+        if not self.game.combat.movement_safe_from_friendly_fire(enemy, movement):
+            return -math.inf
+
+        mine_clearance = MINE_EXPLOSION_RADIUS + TANK_HALF + MINE_ESCAPE_MARGIN
+        if any(
+            mine.alive
+            and point_segment_distance_squared(
+                mine.position,
+                enemy.position,
+                destination,
+            )
+            < mine_clearance**2
+            for mine in self.game.mines
+        ):
+            return -math.inf
+        return min(
+            (
+                math.sqrt(
+                    point_segment_distance_squared(
+                        destination,
+                        segment_start,
+                        segment_end,
+                    )
+                )
+                for segment_start, segment_end in projectile_segments
+            ),
+            default=math.inf,
+        )
+
+    def dodge_incoming_fire(self, enemy: Tank, dt: float) -> Vec2:
+        if enemy.speed <= 0.0 or dt <= 0.0:
+            return Vec2()
+        profile = self.profile_for(enemy)
+        trigger_clearance = (
+            math.hypot(TANK_HALF, TANK_HALF)
+            + BULLET_RADIUS
+            + profile.dodge_margin_px
+        )
+        projectile_segments: list[tuple[Vec2, Vec2]] = []
+        imminent: tuple[float, Vec2, Vec2] | None = None
+
+        for bullet in self.game.bullets:
+            if (
+                not bullet.alive
+                or bullet.team == enemy.team
+                or bullet.velocity.length_squared() == 0
+            ):
+                continue
+            segments = self._projectile_segments(
+                bullet,
+                profile.dodge_prediction_time,
+            )
+            projectile_segments.extend(segments)
+            speed = bullet.velocity.length()
+            travelled = 0.0
+            for segment_start, segment_end in segments:
+                segment = segment_end - segment_start
+                length_squared = segment.length_squared()
+                if length_squared <= 0.000_001:
+                    continue
+                length = math.sqrt(length_squared)
+                ratio = clamp(
+                    (enemy.position - segment_start).dot(segment) / length_squared,
+                    0.0,
+                    1.0,
+                )
+                closest = segment_start + segment * ratio
+                clearance = enemy.position.distance_to(closest)
+                time_to_closest = (travelled + ratio * length) / speed
+                travelled += length
+                if (
+                    clearance > trigger_clearance
+                    or time_to_closest > profile.dodge_prediction_time
+                    or ratio >= 0.999_999
+                    or (
+                        ratio <= 0.000_001
+                        and segment.dot(enemy.position - segment_start) <= 0.0
+                        and clearance > TANK_HALF + BULLET_RADIUS
+                    )
+                ):
+                    continue
+                threat = (time_to_closest, segment.normalize(), closest)
+                if imminent is None or threat[0] < imminent[0]:
+                    imminent = threat
+
+        memory = enemy.ai
+        if memory.dodge_timer <= 0.0:
+            memory.dodge_direction.update(0, 0)
+        movement_distance = enemy.speed * profile.dodge_speed_multiplier * dt
+        if imminent is None:
+            if memory.dodge_timer <= 0.0 or memory.dodge_direction.length_squared() == 0:
+                return Vec2()
+            committed = memory.dodge_direction.normalize() * movement_distance
+            if self._dodge_candidate_clearance(enemy, committed, projectile_segments) > -math.inf:
+                return committed
+            memory.dodge_timer = 0.0
+            memory.dodge_cooldown = max(
+                memory.dodge_cooldown,
+                profile.dodge_cooldown,
+            )
+            memory.dodge_direction.update(0, 0)
+            return Vec2()
+        dodge_speed = enemy.speed * profile.dodge_speed_multiplier
+        escape_time = trigger_clearance / dodge_speed if dodge_speed > 0.0 else math.inf
+        if (
+            memory.dodge_cooldown > 0.0
+            and memory.dodge_timer <= 0.0
+            and imminent[0] > memory.dodge_cooldown + escape_time
+        ):
+            return Vec2()
+
+        _, shot_direction, closest_point = imminent
+        candidate_directions = []
+        if memory.dodge_direction.length_squared() > 0.0:
+            candidate_directions.append(memory.dodge_direction.normalize())
+        side = 1.0 if enemy.route_seed & 1 else -1.0
+        for configured_angle in self.settings.global_config.dodge_candidate_angles_degrees:
+            angle = math.atan2(shot_direction.y, shot_direction.x) + math.radians(
+                configured_angle * side
+            )
+            candidate_directions.append(Vec2(math.cos(angle), math.sin(angle)))
+        away = enemy.position - closest_point
+        if away.length_squared() > 0.0:
+            candidate_directions.append(away.normalize())
+
+        current_clearance = min(
+            (
+                math.sqrt(
+                    point_segment_distance_squared(
+                        enemy.position,
+                        segment_start,
+                        segment_end,
+                    )
+                )
+                for segment_start, segment_end in projectile_segments
+            ),
+            default=math.inf,
+        )
+        best: tuple[float, float, Vec2] | None = None
+        seen: set[tuple[int, int]] = set()
+        for direction in candidate_directions:
+            if direction.length_squared() == 0.0:
+                continue
+            direction = direction.normalize()
+            key = (round(direction.x * 1000), round(direction.y * 1000))
+            if key in seen:
+                continue
+            seen.add(key)
+            movement = direction * movement_distance
+            clearance = self._dodge_candidate_clearance(
+                enemy,
+                movement,
+                projectile_segments,
+            )
+            if clearance <= current_clearance + 0.01:
+                continue
+            commitment = (
+                direction.dot(memory.dodge_direction.normalize())
+                if memory.dodge_direction.length_squared() > 0.0
+                else 0.0
+            )
+            score = (
+                clearance
+                + commitment
+                * movement_distance
+                * profile.dodge_direction_commitment
+            )
+            candidate = (score, clearance, movement)
+            if best is None or candidate[0] > best[0]:
+                best = candidate
+        if best is None:
+            return Vec2()
+
+        movement = best[2]
+        memory.dodge_direction = movement.normalize()
+        memory.dodge_timer = profile.dodge_commit_time
+        memory.dodge_cooldown = 0.0
+        enemy.net_stuck_timer = 0.0
+        enemy.stationary_timer = 0.0
+        enemy.progress_anchor = enemy.position.copy()
+        return movement
+
     def _weapon_ready(self, enemy: Tank) -> bool:
         can_shoot = getattr(self.game.combat, "can_shoot", None)
         if can_shoot is not None:
@@ -753,14 +962,30 @@ class EnemyAISystem:
         enemy.plan_timer -= dt
         enemy.aim_timer -= dt
         enemy.detour_timer = max(0.0, enemy.detour_timer - dt)
+        previous_dodge_timer = enemy.ai.dodge_timer
+        enemy.ai.dodge_timer = max(0.0, enemy.ai.dodge_timer - dt)
+        enemy.ai.dodge_cooldown = max(0.0, enemy.ai.dodge_cooldown - dt)
+        if previous_dodge_timer > 0.0 and enemy.ai.dodge_timer <= 0.0:
+            enemy.ai.dodge_direction.update(0, 0)
+            enemy.ai.dodge_cooldown = max(
+                enemy.ai.dodge_cooldown,
+                profile.dodge_cooldown,
+            )
         enemy.avoid_timer = max(0.0, enemy.avoid_timer - dt)
         if enemy.avoid_timer == 0:
             enemy.avoid_cell = None
-        self.track_movement_progress(enemy, dt)
-        if enemy.net_stuck_timer >= profile.net_stuck_timeout:
-            self.abandon_stuck_route(enemy)
-        has_active_bullet = self.game.combat.active_bullets(enemy) >= enemy.max_bullets
         mine_danger = self.mine_danger(enemy)
+        dodge_movement = Vec2() if mine_danger else self.dodge_incoming_fire(enemy, dt)
+        is_dodging = dodge_movement.length_squared() > 0.0
+        if is_dodging:
+            enemy.net_stuck_timer = 0.0
+            enemy.stationary_timer = 0.0
+            enemy.progress_anchor = enemy.position.copy()
+        else:
+            self.track_movement_progress(enemy, dt)
+            if enemy.net_stuck_timer >= profile.net_stuck_timeout:
+                self.abandon_stuck_route(enemy)
+        has_active_bullet = self.game.combat.active_bullets(enemy) >= enemy.max_bullets
         target_position = (
             context.decision.target_position
             or enemy.ai.navigation_target
@@ -793,8 +1018,8 @@ class EnemyAISystem:
             enemy.detour_timer = 0
         enemy.escaping_mines = mine_danger
 
-        movement = Vec2()
-        if enemy.speed > 0:
+        movement = dodge_movement
+        if enemy.speed > 0 and not is_dodging:
             for attempt in range(2):
                 while enemy.path:
                     target_position = cell_center(enemy.path[0])
@@ -831,10 +1056,11 @@ class EnemyAISystem:
         if (
             enemy.detour_timer > 0
             and not mine_danger
+            and not is_dodging
             and enemy.velocity.length_squared() > 0
         ):
             movement = enemy.velocity.normalize() * enemy.speed * dt
-        if not mine_danger:
+        if not mine_danger and not is_dodging:
             movement = self.coordinate_crowded_cell(enemy, movement, dt)
         movement = self.steer_around_friendly_fire(enemy, movement)
         if mine_danger:
@@ -847,7 +1073,11 @@ class EnemyAISystem:
         starting_position = enemy.position.copy()
         actual_movement = self.move_enemy(enemy, movement) if movement.length_squared() > 0 else Vec2()
         expected_distance = movement.length()
-        if expected_distance > 0 and actual_movement.length() < expected_distance * 0.2:
+        if (
+            expected_distance > 0
+            and not is_dodging
+            and actual_movement.length() < expected_distance * 0.2
+        ):
             base_angle = math.atan2(movement.y, movement.x)
             side = 1 if (enemy.route_seed + enemy.route_variant) & 1 else -1
             detour_succeeded = False
@@ -879,7 +1109,9 @@ class EnemyAISystem:
             enemy.recent_cells.append(current_cell)
             del enemy.recent_cells[:-12]
         if dt > 0:
-            if movement.length_squared() > 0:
+            if is_dodging:
+                enemy.stuck_timer = max(0.0, enemy.stuck_timer - dt * 2.0)
+            elif movement.length_squared() > 0:
                 made_progress = (
                     waypoint is None
                     or enemy.position.distance_to(waypoint) < waypoint_distance - 0.05
@@ -923,7 +1155,10 @@ class EnemyAISystem:
             return
         direct_angle = math.atan2(direct_aim.y, direct_aim.x)
 
-        if not context.perception.target_visible:
+        if (
+            not context.perception.target_visible
+            and not self.settings.global_config.omniscient_player_tracking
+        ):
             if context.perception.target_position is not None:
                 search_aim = context.perception.target_position - enemy.position
                 desired_angle = (

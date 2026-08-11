@@ -77,6 +77,10 @@ class PerceptionSystem:
         memory.hearing_remaining = max(0.0, memory.hearing_remaining - dt)
         memory.sensor_timer -= dt
         memory.sensor_elapsed += dt
+        omniscient = self.settings.global_config.omniscient_player_tracking
+        if omniscient and player.alive:
+            memory.last_known_position = player.position.copy()
+            memory.memory_remaining = profile.memory_duration
 
         distance_tiles = enemy.position.distance_to(player.position) / TILE
         memory.lod_factor = self._lod_factor(distance_tiles)
@@ -93,10 +97,16 @@ class PerceptionSystem:
                 sample_elapsed,
             )
             self._sample_hearing(enemy, player, profile)
+            if omniscient and player.alive:
+                memory.last_known_position = player.position.copy()
+                memory.memory_remaining = profile.memory_duration
 
         heard_contact = memory.hearing_remaining > 0.0 and memory.last_heard_position is not None
         remembered_contact = memory.memory_remaining > 0.0 and memory.last_known_position is not None
-        if memory.target_visible:
+        if omniscient and player.alive:
+            target_position = player.position.copy()
+            remembered_contact = True
+        elif memory.target_visible:
             target_position = player.position.copy()
         elif heard_contact or remembered_contact:
             target_position = (
@@ -112,7 +122,9 @@ class PerceptionSystem:
             target_position=target_position,
             target_visible=memory.target_visible,
             has_line_of_sight=memory.has_line_of_sight,
-            can_engage=memory.target_visible and memory.reaction_remaining <= 0.0,
+            can_engage=(memory.target_visible or omniscient)
+            and player.alive
+            and memory.reaction_remaining <= 0.0,
             heard_contact=heard_contact,
             remembered_contact=remembered_contact,
             just_confirmed=just_confirmed,

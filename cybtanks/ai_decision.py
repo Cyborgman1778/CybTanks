@@ -64,9 +64,19 @@ class UtilityDecisionSystem:
                 "investigate",
                 "search",
             }
+            target_position = (
+                perception.target_position
+                if (
+                    self.settings.global_config.omniscient_player_tracking
+                    and perception.target_position is not None
+                )
+                else memory.navigation_target
+            )
+            if target_position is not None and self.settings.global_config.omniscient_player_tracking:
+                memory.navigation_target = target_position.copy()
             return TacticalDecision(
                 memory.state,
-                memory.navigation_target.copy() if memory.navigation_target is not None else None,
+                target_position.copy() if target_position is not None else None,
                 memory.threat,
                 can_engage,
             )
@@ -76,7 +86,10 @@ class UtilityDecisionSystem:
         if target is None:
             state = "guard"
             target = self._patrol_target(enemy)
-        elif not perception.target_visible:
+        elif (
+            not perception.target_visible
+            and not self.settings.global_config.omniscient_player_tracking
+        ):
             if perception.heard_contact:
                 state = "investigate"
             elif memory.state == "search" and memory.state_elapsed >= self.settings.global_config.search_duration:
@@ -103,6 +116,8 @@ class UtilityDecisionSystem:
             enemy.path = []
             enemy.goal = None
             enemy.plan_timer = 0.0
+        elif target is not None and self.settings.global_config.omniscient_player_tracking:
+            memory.navigation_target = target.copy()
         memory.threat = threat
         memory.decision_index += 1
         interval = profile.decision_interval_near + (
