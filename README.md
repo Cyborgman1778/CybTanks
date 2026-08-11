@@ -18,6 +18,10 @@ py main.py
 | `cybtanks/models.py` | Datos de tanques, balas, partículas y trazas. |
 | `cybtanks/geometry.py` | Cálculos de ángulos, segmentos y formas. |
 | `cybtanks/catalog.py` | Lectura y validación del catálogo de enemigos. |
+| `cybtanks/ai_config.py` | Carga tipada y validación de perfiles de inteligencia. |
+| `cybtanks/ai_perception.py` | Vista progresiva, memoria, oído y LOD sensorial. |
+| `cybtanks/ai_decision.py` | Decisiones Utility AI y evaluación dinámica de amenazas. |
+| `cybtanks/ai_squad.py` | Roles, alertas compartidas y cupos coordinados de ataque. |
 | `cybtanks/levels.py` | Cantidad, mezcla y orden de aparición por nivel. |
 | `cybtanks/world.py` | Grid, paredes, movimiento, A* y superficies de rebote. |
 | `cybtanks/combat.py` | Disparos, rebotes y colisiones de balas y tanques. |
@@ -27,6 +31,7 @@ py main.py
 | `cybtanks/renderer.py` | Carga de assets y dibujo de toda la interfaz. |
 | `cybtanks/game.py` | Niveles, eventos y coordinación de los sistemas. |
 | `data/enemies.csv` | Cualidades editables de cada tipo de enemigo. |
+| `data/ai_profiles.json` | Percepción, táctica, coordinación y presupuestos de rendimiento. |
 | `data/tank_attribute_options.csv` | Opciones válidas y explicación de cada cualidad. |
 | `data/map*.txt` | Mapas: `0` suelo, `1` pared sólida, `2` pared rompible y `3` hoyo. |
 | `data/tile_types.csv` | Colisiones y propiedades de cada tipo de tile. |
@@ -35,7 +40,30 @@ py main.py
 
 ## Datos Editables
 
-`data/enemies.csv` utiliza encabezados descriptivos en español. Las velocidades y cadencias disponibles están en `cybtanks/config.py`, y `data/tank_attribute_options.csv` resume sus valores, unidades y formatos permitidos.
+`data/enemies.csv` utiliza encabezados descriptivos en español para las propiedades físicas y de armamento. Las velocidades y cadencias disponibles están en `cybtanks/config.py`, y `data/tank_attribute_options.csv` resume sus valores, unidades y formatos permitidos.
+
+`data/ai_profiles.json` es la fuente de configuración de inteligencia. Define perfiles base por `nivel_inteligencia`, ajustes concretos por arquetipo y límites globales. El cargador rechaza campos desconocidos, perfiles incompletos, probabilidades fuera de rango, distancias incoherentes y límites de entidades que puedan degradar el rendimiento.
+
+## IA Táctica
+
+Cada enemigo mantiene una memoria independiente y decide mediante Utility AI entre vigilancia, investigación, búsqueda, ataque, flanqueo, cobertura, retirada y evasión. La decisión considera visibilidad real, distancia, proyectiles entrantes, exposición, rol de escuadrón, agresividad y estado del escudo. Como el juego no tiene salud parcial, la retirada se activa por amenaza alta y por pérdida de una protección disponible, sin cambiar la regla existente de muerte de un impacto.
+
+La vista usa rango, cono, tiempo de detección progresivo, reacción y pérdida gradual de conciencia. Al perder contacto, el enemigo investiga la última posición conocida durante un tiempo limitado. Disparos, minas, explosiones y destrucciones generan eventos auditivos posicionales; las paredes sólidas y rompibles atenúan esos sonidos de forma distinta.
+
+Los enemigos cercanos comparten contactos, reciben roles de asalto, apoyo o flanqueo y reservan un número limitado de cupos de ataque. Las reservas de objetivos, las penalizaciones de rutas y la prevención continua de fuego amigo evitan que todas las unidades ocupen o disparen por el mismo corredor.
+
+La navegación táctica evalúa coberturas dinámicas, puntos con posibilidad de asomo, distancia de combate, flancos y rutas de retirada. Cada decisión construye un único campo ponderado para todos sus destinos posibles, en lugar de ejecutar un A* por candidato. La evasión de minas valida también los segmentos entre celdas para no acercarse al peligro durante el trayecto.
+
+Los parámetros principales de `data/ai_profiles.json` incluyen:
+
+- percepción: rango visual y auditivo, FOV, detección, reacción, memoria y frecuencia sensorial;
+- decisión: agresividad, preferencia de cobertura/flanqueo, umbral de retirada e imprevisibilidad;
+- movimiento: distancia ideal, radio de búsqueda, tiempos de replanificación, giro y detección de atasco;
+- combate: tolerancia y frecuencia de puntería, candidatos y error de rebote, minas y cadencia inicial;
+- escuadrón: roles, alcance de comunicación, atacantes simultáneos y duración de reservas;
+- rendimiento: LOD por distancia y presupuestos máximos de rutas y soluciones de disparo por frame.
+
+El movimiento se actualiza cada frame para conservar fluidez. La percepción y las decisiones costosas se ejecutan con temporizadores intercalados; los enemigos lejanos reducen orgánicamente su frecuencia de pensamiento sin alterar sus parámetros físicos.
 
 Los niveles rotan entre ocho escenarios. Para modificarlos, edita `data/map.txt` y `data/map_2.txt` a `data/map_8.txt` sin cambiar sus dimensiones. Los sprites SVG se pueden abrir en un editor de texto o en cualquier editor vectorial.
 

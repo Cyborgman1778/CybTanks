@@ -13,6 +13,31 @@ GridCell = tuple[int, int]
 
 
 @dataclass
+class EnemyMemory:
+    state: str = "guard"
+    role: str = "assault"
+    awareness: float = 0.0
+    has_line_of_sight: bool = False
+    target_visible: bool = False
+    last_known_position: Vec2 | None = None
+    last_seen_position: Vec2 | None = None
+    last_heard_position: Vec2 | None = None
+    memory_remaining: float = 0.0
+    hearing_remaining: float = 0.0
+    reaction_remaining: float = 0.0
+    sensor_timer: float = 0.0
+    sensor_elapsed: float = 0.0
+    decision_timer: float = 0.0
+    state_elapsed: float = 0.0
+    navigation_target: Vec2 | None = None
+    decision_index: int = 0
+    last_alert_time: float = -math.inf
+    last_sound_event_id: int = 0
+    threat: float = 0.0
+    lod_factor: float = 0.0
+
+
+@dataclass
 class Tank:
     tank_id: int
     team: str
@@ -35,6 +60,7 @@ class Tank:
     ricochet_success_rate: float
     self_safe: bool
     shield_hits: int = 0
+    max_shield_hits: int = 0
     shield_flash: float = 0.0
     alive: bool = True
     velocity: Vec2 = field(default_factory=Vec2)
@@ -60,6 +86,7 @@ class Tank:
     route_variant: int = 0
     route_seed: int = 0
     recent_cells: list[GridCell] = field(default_factory=list)
+    ai: EnemyMemory = field(default_factory=EnemyMemory)
 
 
 @dataclass

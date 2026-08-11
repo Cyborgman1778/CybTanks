@@ -5,6 +5,7 @@ import random
 
 import pygame
 
+from .ai_config import load_ai_settings
 from .audio import AudioSystem
 from .catalog import load_enemy_catalog, parse_hex_color
 from .combat import CombatSystem
@@ -37,9 +38,7 @@ from .world import World, cell_center
 
 
 def enemy_initial_fire_delay(kind: str, index: int) -> float:
-    if kind == "dark_green":
-        return 0.65 + index % 3 * 0.08
-    return 1.0 + index * 0.28
+    return load_ai_settings().initial_fire_delay(kind, index)
 
 
 class Game:
@@ -65,6 +64,7 @@ class Game:
         self.track_progress: dict[int, float]
         self.wrecks: list[tuple[Vec2, float, tuple[int, int, int]]]
 
+        self.ai_settings = load_ai_settings()
         self.enemy_catalog = load_enemy_catalog()
         self.world = World()
         self.audio = AudioSystem()
@@ -136,11 +136,10 @@ class Game:
             ricochet_success_rate=ricochet_success_rate,
             self_safe=self_safe,
             shield_hits=shield_hits,
-            fire_timer=enemy_initial_fire_delay(kind, index) if not is_player else 0.0,
-            mine_timer=1.4 + index * 0.25,
-            plan_timer=index * 0.18,
-            route_seed=random.getrandbits(31),
+            max_shield_hits=shield_hits,
         )
+        if not is_player:
+            self.enemy_ai.initialize_enemy(tank, index)
         self.next_tank_id += 1
         return tank
 
@@ -156,6 +155,7 @@ class Game:
         if reset_lives:
             self.lives = PLAYER_STARTING_LIVES
         self.world.reset(map_layout(self.level))
+        self.enemy_ai.reset()
         self.renderer.rebuild_board_background()
         self.bullets = []
         self.mines = []
@@ -202,6 +202,7 @@ class Game:
         self.track_marks = []
         self.track_progress = {}
         self.wrecks = [wreck for wreck in self.wrecks if wreck[2] != PLAYER_COLOR]
+        self.enemy_ai.reset()
 
         for index, enemy in enumerate(self.enemies):
             if not enemy.alive:
@@ -209,29 +210,8 @@ class Game:
             enemy.position = cell_center(enemy.spawn_cell)
             enemy.body_angle = math.pi
             enemy.turret_angle = math.pi
-            enemy.velocity.update(0, 0)
-            enemy.cooldown = 0
-            enemy.shot_think_timer = 0
-            enemy.fire_timer = enemy_initial_fire_delay(enemy.kind, index)
-            enemy.mine_timer = 1.4 + index * 0.25
-            enemy.path = []
-            enemy.goal = None
-            enemy.plan_timer = 0
-            enemy.aim_timer = 0
-            enemy.shot_ready = False
             enemy.shield_flash = 0
-            enemy.stuck_timer = 0
-            enemy.net_stuck_timer = 0
-            enemy.stationary_timer = 0
-            enemy.detour_timer = 0
-            enemy.progress_anchor = None
-            enemy.last_frame_position = None
-            enemy.avoid_cell = None
-            enemy.avoid_timer = 0
-            enemy.escaping_mines = False
-            enemy.route_variant += 1
-            enemy.route_seed = random.getrandbits(31)
-            enemy.recent_cells.clear()
+            self.enemy_ai.initialize_enemy(enemy, index)
 
         self.player = self.make_tank("player", 1, 1)
         self.player.position = cell_center(self.safe_respawn_cell())
@@ -295,6 +275,10 @@ class Game:
         self.create_burst(tank.position, (246, 224, 164), 12, 95)
         if play_destruction_sound:
             self.audio.play_tank_destroyed()
+        self.report_ai_sound(tank.position, "tank_destroyed", tank.team)
+
+    def report_ai_sound(self, position: Vec2, kind: str, source_team: str) -> None:
+        self.enemy_ai.report_sound(position, kind, source_team)
 
     def create_explosion(self, position: Vec2, radius: float) -> None:
         self.explosions.append(ExplosionEffect(position.copy(), radius))

@@ -32,6 +32,7 @@ class World:
         self.layout = MAP
         self.tiles: list[list[int]] = []
         self.bounce_surfaces: list[tuple[str, float, float, float]] = []
+        self.revision = 0
         self.reset()
 
     def reset(self, layout: tuple[tuple[int, ...], ...] | None = None) -> None:
@@ -39,6 +40,7 @@ class World:
             self.layout = layout
         self.tiles = [list(row) for row in self.layout]
         self.bounce_surfaces = self._build_bounce_surfaces()
+        self.revision += 1
 
     def is_wall(self, cell: GridCell) -> bool:
         return self.blocks_tank(cell)
@@ -220,6 +222,67 @@ class World:
         path.reverse()
         return path
 
+    def navigation_field(
+        self,
+        start: GridCell,
+        blocked: set[GridCell] | None = None,
+        penalties: dict[GridCell, float] | None = None,
+        transition_allowed: Callable[[GridCell, GridCell], bool] | None = None,
+    ) -> tuple[dict[GridCell, float], dict[GridCell, GridCell]]:
+        blocked = blocked or set()
+        penalties = penalties or {}
+        if self.is_wall(start):
+            return {}, {}
+
+        frontier: list[tuple[float, GridCell]] = [(0.0, start)]
+        costs: dict[GridCell, float] = {start: 0.0}
+        came_from: dict[GridCell, GridCell] = {}
+        while frontier:
+            current_cost, current = heapq.heappop(frontier)
+            if current_cost != costs.get(current):
+                continue
+            col, row = current
+            for neighbour in (
+                (col + 1, row),
+                (col - 1, row),
+                (col, row + 1),
+                (col, row - 1),
+            ):
+                if (
+                    self.is_wall(neighbour)
+                    or neighbour in blocked
+                    or (
+                        transition_allowed is not None
+                        and not transition_allowed(current, neighbour)
+                    )
+                ):
+                    continue
+                new_cost = current_cost + 1.0 + max(0.0, penalties.get(neighbour, 0.0))
+                if new_cost >= costs.get(neighbour, math.inf):
+                    continue
+                costs[neighbour] = new_cost
+                came_from[neighbour] = current
+                heapq.heappush(frontier, (new_cost, neighbour))
+        return costs, came_from
+
+    @staticmethod
+    def reconstruct_path(
+        start: GridCell,
+        goal: GridCell,
+        came_from: dict[GridCell, GridCell],
+    ) -> list[GridCell] | None:
+        if start == goal:
+            return []
+        if goal not in came_from:
+            return None
+        path = []
+        current = goal
+        while current != start:
+            path.append(current)
+            current = came_from[current]
+        path.reverse()
+        return path
+
     def clear_segment(self, start: Vec2, end: Vec2, margin: float = BULLET_RADIUS) -> bool:
         min_col = max(0, math.floor((min(start.x, end.x) - margin) / TILE))
         max_col = min(COLS - 1, math.floor((max(start.x, end.x) + margin) / TILE))
@@ -236,6 +299,62 @@ class World:
                 if wall.clipline(*line):
                     return False
         return True
+
+    def sound_attenuation(
+        self,
+        start: Vec2,
+        end: Vec2,
+        solid_attenuation: float,
+        breakable_attenuation: float,
+    ) -> float:
+        min_col = max(0, math.floor(min(start.x, end.x) / TILE))
+        max_col = min(COLS - 1, math.floor(max(start.x, end.x) / TILE))
+        min_row = max(0, math.floor(min(start.y, end.y) / TILE))
+        max_row = min(ROWS - 1, math.floor(max(start.y, end.y) / TILE))
+        line = ((start.x, start.y), (end.x, end.y))
+        attenuation = 1.0
+        for row in range(min_row, max_row + 1):
+            for col in range(min_col, max_col + 1):
+                tile = self.tiles[row][col]
+                if tile not in (1, 2):
+                    continue
+                wall = pygame.Rect(col * TILE, row * TILE, TILE, TILE)
+                if not wall.clipline(*line):
+                    continue
+                attenuation *= solid_attenuation if tile == 1 else breakable_attenuation
+                if attenuation < 0.05:
+                    return 0.0
+        return attenuation
+
+    def cover_quality(self, cell: GridCell, threat_position: Vec2) -> float:
+        if self.is_wall(cell):
+            return 0.0
+        center = cell_center(cell)
+        if self.clear_segment(center, threat_position, BULLET_RADIUS + 1.0):
+            col, row = cell
+            adjacent_cover = sum(
+                self.blocks_bullet(neighbour)
+                for neighbour in (
+                    (col + 1, row),
+                    (col - 1, row),
+                    (col, row + 1),
+                    (col, row - 1),
+                )
+            )
+            return min(0.3, adjacent_cover * 0.1)
+
+        col, row = cell
+        peek_available = any(
+            not self.is_wall(neighbour)
+            and self.clear_segment(cell_center(neighbour), threat_position, BULLET_RADIUS + 1.0)
+            for neighbour in (
+                (col + 1, row),
+                (col - 1, row),
+                (col, row + 1),
+                (col, row - 1),
+            )
+        )
+        return 1.0 if peek_available else 0.72
 
     def _build_bounce_surfaces(self) -> list[tuple[str, float, float, float]]:
         surfaces = []
@@ -277,4 +396,5 @@ class World:
 
         if broken:
             self.bounce_surfaces = self._build_bounce_surfaces()
+            self.revision += 1
         return broken

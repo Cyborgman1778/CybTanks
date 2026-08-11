@@ -45,6 +45,9 @@ class MineSystem:
         )
         self.game.create_burst(tank.position, (116, 137, 121), 4, 25)
         self.game.audio.play_mine_place()
+        report_sound = getattr(self.game, "report_ai_sound", None)
+        if report_sound is not None:
+            report_sound(tank.position, "mine_place", tank.team)
         for enemy in self.game.enemies:
             enemy.plan_timer = 0
         return True
@@ -56,6 +59,9 @@ class MineSystem:
         mine.warning_elapsed = 0.0
         mine.beep_timer = MINE_BEEP_INTERVAL
         self.game.audio.play_mine_beep()
+        report_sound = getattr(self.game, "report_ai_sound", None)
+        if report_sound is not None:
+            report_sound(mine.position, "mine_trigger", mine.team)
 
     @staticmethod
     def bullet_touches_mine(bullet: Bullet, mine: Mine) -> bool:
@@ -118,6 +124,9 @@ class MineSystem:
             return
         mine.alive = False
         self.game.create_explosion(mine.position, MINE_EXPLOSION_RADIUS)
+        report_sound = getattr(self.game, "report_ai_sound", None)
+        if report_sound is not None:
+            report_sound(mine.position, "explosion", mine.team)
         for bullet in tuple(self.game.bullets):
             if (
                 bullet.alive

@@ -2,8 +2,14 @@ from __future__ import annotations
 
 import math
 import random
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from .ai_config import AIProfile, load_ai_settings
+from .ai_decision import TacticalDecision, UtilityDecisionSystem
+from .ai_perception import PerceptionSnapshot, PerceptionSystem
+from .ai_squad import SquadCoordinator
 from .config import (
     BULLET_RADIUS,
     COLS,
@@ -14,17 +20,122 @@ from .config import (
     TANK_HALF,
     TILE,
 )
-from .geometry import angle_difference, turn_towards
-from .models import Tank, Vec2
+from .geometry import angle_difference, point_segment_distance_squared, turn_towards
+from .models import EnemyMemory, Tank, Vec2
 from .world import cell_center, grid_cell
 
 if TYPE_CHECKING:
     from .game import Game
 
 
+@dataclass(frozen=True, slots=True)
+class EnemyUpdateContext:
+    profile: AIProfile
+    perception: PerceptionSnapshot
+    decision: TacticalDecision
+
+
 class EnemyAISystem:
     def __init__(self, game: Game) -> None:
         self.game = game
+        self.settings = getattr(game, "ai_settings", None) or load_ai_settings()
+        self.perception = PerceptionSystem(getattr(game, "world", None), self.settings)
+        self.squad = SquadCoordinator(self.settings)
+        self.decisions = UtilityDecisionSystem(game, self.settings)
+        self._profiles: dict[tuple[str, str], AIProfile] = {}
+        self._mine_cache_key: tuple[tuple[int, float, float], ...] | None = None
+        self._mine_blocked_cache: set[tuple[int, int]] = set()
+        self._cell_metrics_cache: dict[
+            tuple[int, tuple[float, float], tuple[int, int]],
+            tuple[float, bool],
+        ] = {}
+        self._path_budget: int | None = None
+        self._shot_budget: int | None = None
+        self._planned_this_frame: set[int] = set()
+        self._update_cursor = 0
+        self._now = 0.0
+
+    def profile_for(self, enemy: Tank) -> AIProfile:
+        key = (enemy.kind, enemy.intelligence)
+        if key not in self._profiles:
+            self._profiles[key] = self.settings.profile_for(*key)
+        return self._profiles[key]
+
+    def reset(self) -> None:
+        self.perception.reset()
+        self.squad.reset()
+        self._mine_cache_key = None
+        self._mine_blocked_cache.clear()
+        self._cell_metrics_cache.clear()
+        self._path_budget = None
+        self._shot_budget = None
+        self._planned_this_frame.clear()
+        self._update_cursor = 0
+        self._now = 0.0
+
+    def initialize_enemy(self, enemy: Tank, index: int) -> None:
+        profile = self.profile_for(enemy)
+        enemy.ai = EnemyMemory(
+            sensor_timer=(index % 6) * profile.sensor_interval_near / 6.0,
+            decision_timer=(index % 5) * profile.decision_interval_near / 5.0,
+        )
+        enemy.velocity.update(0, 0)
+        enemy.cooldown = 0.0
+        enemy.shot_think_timer = 0.0
+        enemy.fire_timer = self.settings.initial_fire_delay(enemy.kind, index)
+        enemy.mine_timer = (
+            self.settings.global_config.initial_mine_delay
+            + index * self.settings.global_config.initial_mine_stagger
+        )
+        enemy.path = []
+        enemy.goal = None
+        enemy.plan_timer = index * 0.03
+        enemy.aim_angle = None
+        enemy.aim_timer = 0.0
+        enemy.shot_ready = False
+        enemy.escaping_mines = False
+        enemy.stuck_timer = 0.0
+        enemy.net_stuck_timer = 0.0
+        enemy.stationary_timer = 0.0
+        enemy.detour_timer = 0.0
+        enemy.progress_anchor = None
+        enemy.last_frame_position = None
+        enemy.avoid_cell = None
+        enemy.avoid_timer = 0.0
+        enemy.route_variant += 1
+        enemy.route_seed = random.getrandbits(31)
+        enemy.recent_cells.clear()
+        self.squad.release_attack_slot(enemy.tank_id)
+
+    def report_sound(self, position: Vec2, kind: str, source_team: str) -> None:
+        self.perception.report_sound(position, kind, source_team)
+
+    def _cell_tactical_metrics(
+        self,
+        cell: tuple[int, int],
+        target_position: Vec2,
+    ) -> tuple[float, bool]:
+        key = (
+            getattr(self.game.world, "revision", 0),
+            (round(target_position.x, 1), round(target_position.y, 1)),
+            cell,
+        )
+        cached = self._cell_metrics_cache.get(key)
+        if cached is not None:
+            return cached
+        position = cell_center(cell)
+        metrics = (
+            self.game.world.cover_quality(cell, target_position),
+            self.game.world.clear_segment(
+                position,
+                target_position,
+                BULLET_RADIUS + 1.0,
+            ),
+        )
+        if len(self._cell_metrics_cache) >= 2048:
+            self._cell_metrics_cache.clear()
+        self._cell_metrics_cache[key] = metrics
+        return metrics
 
     def direct_shot_angle(self, enemy: Tank) -> float | None:
         difference = self.game.player.position - enemy.position
@@ -32,13 +143,15 @@ class EnemyAISystem:
             return None
         perpendicular = Vec2(-difference.y, difference.x).normalize()
         candidates = []
-        for offset in (0, -8, 8, -14, 14):
+        for offset in self.settings.global_config.direct_aim_offsets_px:
             aim_point = self.game.player.position + perpendicular * offset
             if not self.game.world.clear_segment(enemy.position, aim_point, BULLET_RADIUS + 1):
                 continue
             angle = math.atan2(aim_point.y - enemy.position.y, aim_point.x - enemy.position.x)
             trace = self.game.combat.trace_shot(enemy, angle, self.game.player)
             if trace.target_hit and trace.target_bounces == 0 and not trace.self_hit and not trace.ally_hit:
+                if offset == 0:
+                    return angle
                 candidates.append((trace.target_distance, angle))
         return min(candidates)[1] if candidates else None
 
@@ -74,7 +187,10 @@ class EnemyAISystem:
         return [angle for _, angle in candidates]
 
     def accurate_ricochet_angle(self, enemy: Tank) -> float | None:
-        for angle in self.ricochet_angles(enemy, self.game.player):
+        if enemy.max_bounces <= 0:
+            return None
+        candidate_limit = self.profile_for(enemy).max_ricochet_candidates
+        for angle in self.ricochet_angles(enemy, self.game.player)[:candidate_limit]:
             trace = self.game.combat.trace_shot(enemy, angle, self.game.player)
             if trace.target_hit and trace.target_bounces == 1 and not trace.self_hit and not trace.ally_hit:
                 return angle
@@ -95,8 +211,14 @@ class EnemyAISystem:
         if enemy.ricochet_accuracy == "accurate" or random.random() < enemy.ricochet_success_rate:
             return ricochet_angle, True
 
-        for _ in range(8):
-            error = random.choice((-1, 1)) * random.uniform(0.045, 0.14)
+        profile = self.profile_for(enemy)
+        for _ in range(profile.ricochet_error_attempts):
+            error = random.choice((-1, 1)) * math.radians(
+                random.uniform(
+                    profile.ricochet_error_min_degrees,
+                    profile.ricochet_error_max_degrees,
+                )
+            )
             inaccurate_angle = ricochet_angle + error
             trace = self.game.combat.trace_shot(enemy, inaccurate_angle, self.game.player)
             if not trace.self_hit and not trace.ally_hit:
@@ -105,27 +227,28 @@ class EnemyAISystem:
 
     def plan_path(self, enemy: Tank) -> None:
         start = grid_cell(enemy.position)
-        player_cell = grid_cell(self.game.player.position)
-        tactical = enemy.intelligence == "tactical"
-        search_radius = 5 if tactical else 2
+        profile = self.profile_for(enemy)
+        target_position = enemy.ai.navigation_target or self.game.player.position
+        target_cell = grid_cell(target_position)
+        state = enemy.ai.state if enemy.ai.navigation_target is not None else "attack"
         blocked = self.mine_blocked_cells()
         blocked.discard(start)
-
         penalties = self.route_penalties(enemy)
         reserved_goals = {
             ally.goal
             for ally in self.game.enemies
             if ally.alive and ally.tank_id != enemy.tank_id and ally.goal is not None
         }
-        candidates = []
-        for row in range(
-            max(1, player_cell[1] - search_radius),
-            min(ROWS - 1, player_cell[1] + search_radius + 1),
-        ):
-            for col in range(
-                max(1, player_cell[0] - search_radius),
-                min(COLS - 1, player_cell[0] + search_radius + 1),
-            ):
+        search_radius = profile.navigation_search_radius_tiles
+        search_center = target_cell
+        if state in {"cover", "retreat"}:
+            search_center = start
+            search_radius = self.settings.global_config.cover_search_radius_tiles
+
+        candidate_cells = []
+        current_target_distance = abs(start[0] - target_cell[0]) + abs(start[1] - target_cell[1])
+        for row in range(max(1, search_center[1] - search_radius), min(ROWS - 1, search_center[1] + search_radius + 1)):
+            for col in range(max(1, search_center[0] - search_radius), min(COLS - 1, search_center[0] + search_radius + 1)):
                 candidate = (col, row)
                 if (
                     self.game.world.is_wall(candidate)
@@ -133,86 +256,115 @@ class EnemyAISystem:
                     or (enemy.speed > 0 and candidate == start)
                 ):
                     continue
-                distance_to_player = abs(col - player_cell[0]) + abs(row - player_cell[1])
-                if tactical and not 3 <= distance_to_player <= 5:
+                distance_to_target = abs(col - target_cell[0]) + abs(row - target_cell[1])
+                if state in {"attack", "flank"} and not (
+                    profile.min_distance_tiles <= distance_to_target <= profile.max_distance_tiles
+                ):
                     continue
-                if not tactical and distance_to_player > 2:
+                if state == "investigate" and distance_to_target > 1:
                     continue
-                path = self.game.world.find_path(start, candidate, blocked, penalties)
-                if path is None:
+                if state == "search" and distance_to_target > 3:
                     continue
-                overlap_cost = sum(penalties.get(cell, 0.0) for cell in path)
-                reservation_cost = 8.0 if candidate in reserved_goals else 0.0
-                variant_hash = (
-                    col * 73_856_093
-                    ^ row * 19_349_663
-                    ^ enemy.route_seed
-                    ^ enemy.route_variant * 83_492_791
-                )
-                variant = (variant_hash & 0xFFFF) / 0xFFFF * 1.8
-                if tactical:
-                    has_firing_lane = self.game.world.clear_segment(
-                        cell_center(candidate),
-                        self.game.player.position,
-                        BULLET_RADIUS + 1,
-                    )
-                    score = (
-                        len(path) * 0.65
-                        + overlap_cost
-                        + abs(distance_to_player - 4) * 1.4
-                        + reservation_cost
-                        + (0.0 if has_firing_lane else 4.5)
-                        + variant
-                    )
-                else:
-                    score = (
-                        len(path)
-                        + overlap_cost
-                        + distance_to_player * 0.7
-                        + reservation_cost
-                        + variant
-                    )
-                candidates.append((score, candidate, path))
+                if state == "retreat" and distance_to_target <= current_target_distance:
+                    continue
+                candidate_cells.append(candidate)
+
+        costs, came_from = self.game.world.navigation_field(start, blocked, penalties)
+        candidates = []
+        for candidate in candidate_cells:
+            if candidate not in costs:
+                continue
+            col, row = candidate
+            position = cell_center(candidate)
+            distance_to_target = abs(col - target_cell[0]) + abs(row - target_cell[1])
+            reservation_cost = (
+                self.settings.global_config.route_reserved_goal_penalty
+                if candidate in reserved_goals
+                else 0.0
+            )
+            variant_hash = (
+                col * 73_856_093
+                ^ row * 19_349_663
+                ^ enemy.route_seed
+                ^ enemy.route_variant * 83_492_791
+            )
+            variant = (
+                (variant_hash & 0xFFFF)
+                / 0xFFFF
+                * self.settings.global_config.route_noise
+                * (1.0 + profile.unpredictability)
+            )
+            if state in {"attack", "flank", "cover", "retreat"}:
+                cover, firing_lane = self._cell_tactical_metrics(candidate, target_position)
+            else:
+                cover, firing_lane = 0.0, False
+            score = costs[candidate] + reservation_cost + variant
+            if state == "attack":
+                score += abs(distance_to_target - profile.preferred_distance_tiles) * 1.35
+                score += 0.0 if firing_lane else 3.2 + profile.aggression
+                score -= cover * profile.cover_preference * 1.4
+            elif state == "flank":
+                target_to_enemy = enemy.position - target_position
+                target_to_candidate = position - target_position
+                if target_to_enemy.length_squared() > 0 and target_to_candidate.length_squared() > 0:
+                    side = 1.0 if enemy.route_seed & 1 else -1.0
+                    desired_side = Vec2(-target_to_enemy.y, target_to_enemy.x).normalize() * side
+                    lateral_alignment = desired_side.dot(target_to_candidate.normalize())
+                    score += (1.0 - lateral_alignment) * self.settings.global_config.flank_lateral_tiles
+                score += abs(distance_to_target - profile.preferred_distance_tiles)
+                score -= cover * profile.cover_preference
+            elif state == "cover":
+                score -= cover * (5.0 + profile.cover_preference * 4.0)
+                if cover < 0.6:
+                    score += 6.0
+            elif state == "retreat":
+                score -= distance_to_target * 1.45
+                score -= cover * (2.5 + profile.cover_preference * 2.5)
+            elif state in {"investigate", "search"}:
+                score += distance_to_target * (2.0 if state == "investigate" else 0.65)
+                score -= cover * profile.cover_preference * 0.5
+            else:
+                score += distance_to_target * 1.5
+            candidates.append((score, candidate))
 
         if not candidates:
             col, row = start
             for candidate in ((col + 1, row), (col - 1, row), (col, row + 1), (col, row - 1)):
-                if self.game.world.is_wall(candidate) or candidate in blocked:
-                    continue
-                path = self.game.world.find_path(start, candidate, blocked, penalties)
-                if path:
-                    score = len(path) + sum(penalties.get(cell, 0.0) for cell in path)
-                    candidates.append((score, candidate, path))
+                if candidate in costs and candidate not in blocked:
+                    candidates.append((costs[candidate], candidate))
 
         if candidates:
-            _, enemy.goal, enemy.path = min(candidates, key=lambda item: item[0])
+            _, enemy.goal = min(candidates, key=lambda item: item[0])
+            enemy.path = self.game.world.reconstruct_path(start, enemy.goal, came_from) or []
         else:
             enemy.goal = start
             enemy.path = []
-        enemy.plan_timer = (
-            0.55 + random.random() * 0.25
-            if tactical
-            else 0.75 + random.random() * 0.4
+        enemy.plan_timer = profile.navigation_interval_min + random.random() * (
+            profile.navigation_interval_max - profile.navigation_interval_min
         )
 
     def route_penalties(self, enemy: Tank) -> dict[tuple[int, int], float]:
+        config = self.settings.global_config
         penalties: dict[tuple[int, int], float] = {}
         for ally in self.game.enemies:
             if not ally.alive or ally.tank_id == enemy.tank_id:
                 continue
             occupied = grid_cell(ally.position)
-            penalties[occupied] = penalties.get(occupied, 0.0) + 12.0
+            penalties[occupied] = penalties.get(occupied, 0.0) + config.route_occupied_penalty
             for index, cell in enumerate(ally.path[:10]):
-                penalty = max(1.0, 6.0 - index * 0.5)
+                penalty = max(1.0, config.route_ally_path_penalty - index * 0.5)
                 penalties[cell] = penalties.get(cell, 0.0) + penalty
             if ally.goal is not None:
-                penalties[ally.goal] = penalties.get(ally.goal, 0.0) + 4.0
+                penalties[ally.goal] = penalties.get(ally.goal, 0.0) + config.route_reserved_goal_penalty
 
         for index, cell in enumerate(reversed(enemy.recent_cells[-10:])):
-            penalties[cell] = penalties.get(cell, 0.0) + max(0.5, 3.5 - index * 0.35)
+            penalties[cell] = penalties.get(cell, 0.0) + max(
+                0.5,
+                config.route_recent_penalty - index * 0.35,
+            )
 
         if enemy.avoid_cell is not None and enemy.avoid_timer > 0:
-            penalties[enemy.avoid_cell] = penalties.get(enemy.avoid_cell, 0.0) + 10.0
+            penalties[enemy.avoid_cell] = penalties.get(enemy.avoid_cell, 0.0) + config.route_avoid_penalty
 
         noise_seed = enemy.route_seed ^ (enemy.route_variant * 83_492_791)
         for row in range(1, ROWS - 1):
@@ -221,12 +373,21 @@ class EnemyAISystem:
                 if self.game.world.is_wall(cell):
                     continue
                 value = (col * 73_856_093) ^ (row * 19_349_663) ^ noise_seed
-                penalties[cell] = penalties.get(cell, 0.0) + (value & 0xFFFF) / 0xFFFF * 0.45
+                penalties[cell] = penalties.get(cell, 0.0) + (value & 0xFFFF) / 0xFFFF * config.route_noise
         return penalties
 
     def mine_blocked_cells(self) -> set[tuple[int, int]]:
+        cache_key = tuple(
+            sorted(
+                (id(mine), round(mine.position.x, 3), round(mine.position.y, 3))
+                for mine in self.game.mines
+                if mine.alive
+            )
+        )
+        if cache_key == self._mine_cache_key:
+            return set(self._mine_blocked_cache)
         safe_distance = MINE_EXPLOSION_RADIUS + TANK_HALF + MINE_ESCAPE_MARGIN
-        return {
+        self._mine_blocked_cache = {
             (col, row)
             for row in range(1, ROWS - 1)
             for col in range(1, COLS - 1)
@@ -235,6 +396,8 @@ class EnemyAISystem:
                 for mine in self.game.mines
             )
         }
+        self._mine_cache_key = cache_key
+        return set(self._mine_blocked_cache)
 
     def mine_danger(self, enemy: Tank) -> bool:
         safe_distance = MINE_EXPLOSION_RADIUS + TANK_HALF + MINE_ESCAPE_MARGIN
@@ -245,14 +408,18 @@ class EnemyAISystem:
 
     def route_has_mine_danger(self, enemy: Tank) -> bool:
         safe_distance = MINE_EXPLOSION_RADIUS + TANK_HALF + MINE_ESCAPE_MARGIN
-        return any(
-            mine.alive
-            and any(
-                cell_center(cell).distance_to(mine.position) < safe_distance
-                for cell in enemy.path
-            )
-            for mine in self.game.mines
-        )
+        route_points = [enemy.position, *(cell_center(cell) for cell in enemy.path)]
+        for mine in self.game.mines:
+            if not mine.alive:
+                continue
+            if any(point.distance_to(mine.position) < safe_distance for point in route_points):
+                return True
+            if any(
+                point_segment_distance_squared(mine.position, start, end) < safe_distance**2
+                for start, end in zip(route_points, route_points[1:])
+            ):
+                return True
+        return False
 
     def steer_around_friendly_fire(self, enemy: Tank, movement: Vec2) -> Vec2:
         if self.game.combat.movement_safe_from_friendly_fire(enemy, movement):
@@ -333,7 +500,7 @@ class EnemyAISystem:
             )
         ]
         group = [enemy, *cellmates]
-        wait_time = 0.05 if any(tank.kind == "yellow" for tank in group) else 0.12
+        wait_time = min(self.profile_for(tank).crowd_wait_time for tank in group)
         if not cellmates or max(tank.stationary_timer for tank in group) < wait_time:
             return movement
         if any(self.mine_danger(tank) for tank in group):
@@ -396,41 +563,191 @@ class EnemyAISystem:
     def plan_mine_escape(self, enemy: Tank) -> None:
         safe_distance = MINE_EXPLOSION_RADIUS + TANK_HALF + MINE_ESCAPE_MARGIN
         start = grid_cell(enemy.position)
-        candidates = []
+        active_mines = [mine for mine in self.game.mines if mine.alive]
+        if not active_mines:
+            enemy.path = []
+            enemy.plan_timer = 0.15
+            return
+
+        def clearance(cell: tuple[int, int]) -> float:
+            position = cell_center(cell)
+            return min(position.distance_to(mine.position) for mine in active_mines)
+
+        penalties = self.route_penalties(enemy)
+        config = self.settings.global_config
+        safe_candidates = []
         for row in range(1, ROWS - 1):
             for col in range(1, COLS - 1):
                 cell = (col, row)
                 if self.game.world.is_wall(cell):
                     continue
-                position = cell_center(cell)
-                closest_mine = min(
-                    (position.distance_to(mine.position) for mine in self.game.mines if mine.alive),
-                    default=math.inf,
-                )
-                if closest_mine < safe_distance:
-                    continue
-                grid_distance = abs(col - start[0]) + abs(row - start[1])
-                candidates.append((grid_distance, -closest_mine, cell))
+                cell_clearance = clearance(cell)
+                if cell_clearance < safe_distance:
+                    exposure = (safe_distance - cell_clearance) / TILE
+                    penalties[cell] = penalties.get(cell, 0.0) + exposure * config.mine_danger_penalty
+                else:
+                    safe_candidates.append(cell)
 
-        candidates.sort()
-        for _, _, candidate in candidates:
-            path = self.game.world.find_path(
-                start,
-                candidate,
-                penalties=self.route_penalties(enemy),
+        starting_clearance = min(enemy.position.distance_to(mine.position) for mine in active_mines)
+
+        def transition_safe(
+            current: tuple[int, int],
+            neighbour: tuple[int, int],
+        ) -> bool:
+            current_position = enemy.position if current == start else cell_center(current)
+            neighbour_position = cell_center(neighbour)
+            segment_clearance = min(
+                math.sqrt(
+                    point_segment_distance_squared(
+                        mine.position,
+                        current_position,
+                        neighbour_position,
+                    )
+                )
+                for mine in active_mines
             )
+            return segment_clearance + 0.01 >= starting_clearance
+
+        costs, came_from = self.game.world.navigation_field(
+            start,
+            penalties=penalties,
+            transition_allowed=transition_safe,
+        )
+        if not any(candidate in costs for candidate in safe_candidates):
+            costs, came_from = self.game.world.navigation_field(start, penalties=penalties)
+        candidates = []
+        for candidate in safe_candidates:
+            if candidate not in costs:
+                continue
+            path = self.game.world.reconstruct_path(start, candidate, came_from)
             if path is None:
                 continue
-            if not path and enemy.position.distance_to(cell_center(candidate)) >= 0.5:
-                path = [candidate]
-            enemy.goal = candidate
-            enemy.path = path
+            route_points = [enemy.position, *(cell_center(cell) for cell in path)]
+            route_clearance = min(
+                (
+                    math.sqrt(point_segment_distance_squared(mine.position, start_point, end_point))
+                    for mine in active_mines
+                    for start_point, end_point in zip(route_points, route_points[1:])
+                ),
+                default=starting_clearance,
+            )
+            regression = max(0.0, starting_clearance - route_clearance)
+            candidate_clearance = clearance(candidate)
+            score = (
+                regression > 0.01,
+                regression,
+                costs[candidate] - candidate_clearance / safe_distance * 0.35,
+            )
+            candidates.append((score, candidate, path))
+
+        if candidates:
+            _, enemy.goal, enemy.path = min(candidates, key=lambda item: item[0])
+            if not enemy.path and enemy.position.distance_to(cell_center(enemy.goal)) >= 0.5:
+                enemy.path = [enemy.goal]
             enemy.plan_timer = 0.22
+            enemy.ai.state = "evade"
             return
         enemy.path = []
         enemy.plan_timer = 0.15
 
-    def update_enemy(self, enemy: Tank, dt: float) -> None:
+    def _try_plan(self, enemy: Tank, planner: Callable[[Tank], None]) -> bool:
+        if self._path_budget is not None:
+            if enemy.tank_id in self._planned_this_frame or self._path_budget <= 0:
+                return False
+            self._path_budget -= 1
+            self._planned_this_frame.add(enemy.tank_id)
+        planner(enemy)
+        return True
+
+    def _steer_away_from_mines(self, enemy: Tank, movement: Vec2) -> Vec2:
+        active_mines = [mine for mine in self.game.mines if mine.alive]
+        if not active_mines or movement.length_squared() == 0:
+            return movement
+        current_clearance = min(enemy.position.distance_to(mine.position) for mine in active_mines)
+        future_position = enemy.position + movement
+        movement_clearance = min(
+            math.sqrt(
+                point_segment_distance_squared(
+                    mine.position,
+                    enemy.position,
+                    future_position,
+                )
+            )
+            for mine in active_mines
+        )
+        if (
+            movement_clearance + 0.01 >= current_clearance
+            and self.game.combat.movement_safe_from_friendly_fire(enemy, movement)
+        ):
+            return movement
+        escape = sum(
+            (
+                (enemy.position - mine.position).normalize()
+                for mine in active_mines
+                if enemy.position.distance_squared_to(mine.position) > 0
+            ),
+            Vec2(),
+        )
+        if escape.length_squared() == 0:
+            return Vec2()
+        base_angle = math.atan2(escape.y, escape.x)
+        for offset in (0.0, math.pi / 4, -math.pi / 4, math.pi / 2, -math.pi / 2):
+            direction = Vec2(math.cos(base_angle + offset), math.sin(base_angle + offset))
+            candidate = direction * movement.length()
+            if self.game.world.tank_touches_wall(enemy.position + candidate):
+                continue
+            candidate_position = enemy.position + candidate
+            candidate_clearance = min(
+                math.sqrt(
+                    point_segment_distance_squared(
+                        mine.position,
+                        enemy.position,
+                        candidate_position,
+                    )
+                )
+                for mine in active_mines
+            )
+            if (
+                candidate_clearance + 0.01 >= current_clearance
+                and self.game.combat.movement_safe_from_friendly_fire(enemy, candidate)
+            ):
+                return candidate
+        return Vec2()
+
+    def _weapon_ready(self, enemy: Tank) -> bool:
+        can_shoot = getattr(self.game.combat, "can_shoot", None)
+        if can_shoot is not None:
+            return bool(can_shoot(enemy))
+        return (
+            enemy.alive
+            and enemy.cooldown <= 0.0
+            and enemy.shot_think_timer <= 0.0
+            and self.game.combat.active_bullets(enemy) < enemy.max_bullets
+        )
+
+    def _standalone_context(self, enemy: Tank) -> EnemyUpdateContext:
+        target = self.game.player.position.copy()
+        perception = PerceptionSnapshot(
+            target_position=target,
+            target_visible=True,
+            has_line_of_sight=True,
+            can_engage=True,
+            heard_contact=False,
+            remembered_contact=True,
+            just_confirmed=False,
+        )
+        decision = TacticalDecision("attack", target, 0.0, True)
+        return EnemyUpdateContext(self.profile_for(enemy), perception, decision)
+
+    def update_enemy(
+        self,
+        enemy: Tank,
+        dt: float,
+        context: EnemyUpdateContext | None = None,
+    ) -> None:
+        managed_update = context is not None
+        context = context or self._standalone_context(enemy)
+        profile = context.profile
         enemy.fire_timer -= dt
         enemy.mine_timer -= dt
         enemy.plan_timer -= dt
@@ -440,36 +757,38 @@ class EnemyAISystem:
         if enemy.avoid_timer == 0:
             enemy.avoid_cell = None
         self.track_movement_progress(enemy, dt)
-        net_stuck_limit = 0.2 if enemy.kind == "yellow" else 0.45
-        if enemy.net_stuck_timer >= net_stuck_limit:
+        if enemy.net_stuck_timer >= profile.net_stuck_timeout:
             self.abandon_stuck_route(enemy)
         has_active_bullet = self.game.combat.active_bullets(enemy) >= enemy.max_bullets
         mine_danger = self.mine_danger(enemy)
-        player_cell = grid_cell(self.game.player.position)
+        target_position = (
+            context.decision.target_position
+            or enemy.ai.navigation_target
+            or self.game.player.position
+        )
+        target_cell = grid_cell(target_position)
         goal_distance = (
             math.inf
             if enemy.goal is None
-            else abs(enemy.goal[0] - player_cell[0])
-            + abs(enemy.goal[1] - player_cell[1])
+            else abs(enemy.goal[0] - target_cell[0])
+            + abs(enemy.goal[1] - target_cell[1])
         )
-        goal_outdated = (
-            not 3 <= goal_distance <= 5
-            if enemy.intelligence == "tactical"
-            else goal_distance > 4
+        goal_outdated = context.decision.state in {"attack", "flank"} and not (
+            profile.min_distance_tiles <= goal_distance <= profile.max_distance_tiles
         )
         route_unsafe = enemy.plan_timer <= 0 and self.route_has_mine_danger(enemy)
         if enemy.speed > 0:
             if mine_danger and (
                 not enemy.escaping_mines or not enemy.path or route_unsafe
             ):
-                self.plan_mine_escape(enemy)
+                self._try_plan(enemy, self.plan_mine_escape)
             elif not mine_danger and (
                 enemy.escaping_mines
                 or not enemy.path
                 or route_unsafe
                 or (enemy.plan_timer <= 0 and goal_outdated)
             ):
-                self.plan_path(enemy)
+                self._try_plan(enemy, self.plan_path)
         if mine_danger:
             enemy.detour_timer = 0
         enemy.escaping_mines = mine_danger
@@ -503,9 +822,11 @@ class EnemyAISystem:
                 if enemy.path or attempt > 0:
                     break
                 if mine_danger:
-                    self.plan_mine_escape(enemy)
+                    planned = self._try_plan(enemy, self.plan_mine_escape)
                 else:
-                    self.plan_path(enemy)
+                    planned = self._try_plan(enemy, self.plan_path)
+                if not planned:
+                    break
 
         if (
             enemy.detour_timer > 0
@@ -516,6 +837,8 @@ class EnemyAISystem:
         if not mine_danger:
             movement = self.coordinate_crowded_cell(enemy, movement, dt)
         movement = self.steer_around_friendly_fire(enemy, movement)
+        if mine_danger:
+            movement = self._steer_away_from_mines(enemy, movement)
 
         waypoint = cell_center(enemy.path[0]) if enemy.path else None
         waypoint_distance = (
@@ -524,8 +847,6 @@ class EnemyAISystem:
         starting_position = enemy.position.copy()
         actual_movement = self.move_enemy(enemy, movement) if movement.length_squared() > 0 else Vec2()
         expected_distance = movement.length()
-        if expected_distance <= 0.000_001 and enemy.speed > 0:
-            expected_distance = enemy.speed * dt
         if expected_distance > 0 and actual_movement.length() < expected_distance * 0.2:
             base_angle = math.atan2(movement.y, movement.x)
             side = 1 if (enemy.route_seed + enemy.route_variant) & 1 else -1
@@ -538,6 +859,8 @@ class EnemyAISystem:
                 angle = base_angle + offset
                 detour = Vec2(math.cos(angle), math.sin(angle)) * remaining
                 detour = self.steer_around_friendly_fire(enemy, detour)
+                if mine_danger:
+                    detour = self._steer_away_from_mines(enemy, detour)
                 if self.game.world.tank_touches_wall(enemy.position + detour):
                     continue
                 detour_start = enemy.position.copy()
@@ -568,12 +891,15 @@ class EnemyAISystem:
             else:
                 enemy.stuck_timer = 0.0
 
-        local_stuck_limit = 0.2 if enemy.kind == "yellow" else 0.35
-        if enemy.stuck_timer >= local_stuck_limit:
+        if enemy.stuck_timer >= profile.local_stuck_timeout:
             self.abandon_stuck_route(enemy)
         if actual_movement.length_squared() > 0:
             move_angle = math.atan2(actual_movement.y, actual_movement.x)
-            enemy.body_angle = turn_towards(enemy.body_angle, move_angle, 5.5 * dt)
+            enemy.body_angle = turn_towards(
+                enemy.body_angle,
+                move_angle,
+                profile.body_turn_speed * dt,
+            )
         elif movement.length_squared() > 0:
             enemy.plan_timer = 0.0
 
@@ -581,36 +907,80 @@ class EnemyAISystem:
             enemy.max_mines > 0
             and enemy.mine_timer <= 0
             and not mine_danger
+            and (not managed_update or context.perception.target_position is not None)
             and self.allies_safe_from_new_mine(enemy)
         ):
             if self.game.mine_system.place(enemy):
-                enemy.mine_timer = 2.4 + random.random() * 0.8
+                enemy.mine_timer = profile.mine_interval_min + random.random() * (
+                    profile.mine_interval_max - profile.mine_interval_min
+                )
                 enemy.plan_timer = 0
             else:
-                enemy.mine_timer = 0.45
+                enemy.mine_timer = self.settings.global_config.mine_retry_interval
 
         direct_aim = self.game.player.position - enemy.position
         if direct_aim.length_squared() == 0:
             return
         direct_angle = math.atan2(direct_aim.y, direct_aim.x)
 
-        if has_active_bullet or enemy.fire_timer > 0:
+        if not context.perception.target_visible:
+            if context.perception.target_position is not None:
+                search_aim = context.perception.target_position - enemy.position
+                desired_angle = (
+                    math.atan2(search_aim.y, search_aim.x)
+                    if search_aim.length_squared() > 0
+                    else enemy.body_angle
+                )
+            else:
+                scan_phase = self._now * profile.scan_speed + (enemy.route_seed & 0xFF) / 255.0 * math.tau
+                desired_angle = enemy.body_angle + math.sin(scan_phase) * math.radians(profile.scan_arc_degrees) * 0.5
+            enemy.aim_angle = desired_angle
+            enemy.shot_ready = False
+            enemy.turret_angle = turn_towards(
+                enemy.turret_angle,
+                desired_angle,
+                profile.turret_turn_speed * dt,
+            )
+            return
+
+        weapon_ready = (
+            not has_active_bullet
+            and enemy.fire_timer <= 0.0
+            and self._weapon_ready(enemy)
+            and context.decision.can_engage
+        )
+        needs_solution = enemy.aim_timer <= 0 or enemy.aim_angle is None
+        has_attack_slot = True
+        if managed_update and weapon_ready:
+            shot_budget_available = (
+                not needs_solution
+                or self._shot_budget is None
+                or self._shot_budget > 0
+            )
+            has_attack_slot = (
+                self.squad.request_attack_slot(enemy, self._now)
+                if shot_budget_available and (enemy.shot_ready or needs_solution)
+                else False
+            )
+
+        if not weapon_ready or not has_attack_slot:
             enemy.aim_angle = direct_angle
             enemy.shot_ready = False
-        elif enemy.aim_timer <= 0 or enemy.aim_angle is None:
+        elif needs_solution:
+            if managed_update and self._shot_budget is not None:
+                self._shot_budget -= 1
             enemy.aim_angle, enemy.shot_ready = self.choose_shot(enemy)
-            if enemy.intelligence == "tactical":
-                enemy.aim_timer = 0.25
-            elif enemy.ricochet_accuracy == "accurate":
-                enemy.aim_timer = 0.35
-            elif enemy.intelligence == "medium":
-                enemy.aim_timer = 0.4
-            else:
-                enemy.aim_timer = 0.5
+            enemy.aim_timer = profile.aim_interval
+            if managed_update and not enemy.shot_ready:
+                self.squad.release_attack_slot(enemy.tank_id)
 
         desired_angle = enemy.aim_angle if enemy.aim_angle is not None else direct_angle
-        enemy.turret_angle = turn_towards(enemy.turret_angle, desired_angle, 2.25 * dt)
-        aim_tolerance = 0.045 if enemy.kind == "dark_green" else 0.075
+        enemy.turret_angle = turn_towards(
+            enemy.turret_angle,
+            desired_angle,
+            profile.turret_turn_speed * dt,
+        )
+        aim_tolerance = math.radians(profile.aim_tolerance_degrees)
         turret_ready = abs(angle_difference(desired_angle, enemy.turret_angle)) < aim_tolerance
 
         if enemy.fire_timer <= 0 and enemy.shot_ready and turret_ready:
@@ -620,6 +990,8 @@ class EnemyAISystem:
                 self.game.player,
             )
             if safety_check.self_hit or safety_check.ally_hit:
+                if managed_update:
+                    self.squad.release_attack_slot(enemy.tank_id)
                 enemy.aim_timer = 0
                 enemy.shot_ready = False
                 return
@@ -634,14 +1006,61 @@ class EnemyAISystem:
             if not ally.alive or ally.tank_id == enemy.tank_id:
                 continue
             future_positions = [ally.position, *(cell_center(cell) for cell in ally.path[:3])]
-            if any(position.distance_to(enemy.position) < danger_distance for position in future_positions):
+            if any(position.distance_to(enemy.position) <= danger_distance for position in future_positions):
+                return False
+            if any(
+                point_segment_distance_squared(enemy.position, start, end) <= danger_distance**2
+                for start, end in zip(future_positions, future_positions[1:])
+            ):
                 return False
         return True
 
     def update(self, dt: float) -> None:
         if not self.game.player.alive:
             return
+        self._now += dt
+        self.perception.begin_frame(dt)
+        alive_enemies = [enemy for enemy in self.game.enemies if enemy.alive]
+        self.squad.begin_frame(
+            alive_enemies,
+            self._now,
+            self.profile_for,
+        )
         self.game.combat.prepare_friendly_fire_paths("enemy")
-        for enemy in self.game.enemies:
-            if enemy.alive:
-                self.update_enemy(enemy, dt)
+        self._path_budget = self.settings.global_config.max_path_plans_per_frame
+        self._shot_budget = self.settings.global_config.max_shot_plans_per_frame
+        self._planned_this_frame.clear()
+        if alive_enemies:
+            start = self._update_cursor % len(alive_enemies)
+            ordered_enemies = alive_enemies[start:] + alive_enemies[:start]
+            self._update_cursor = (
+                start + 1
+            ) % len(alive_enemies)
+        else:
+            ordered_enemies = []
+        try:
+            for enemy in ordered_enemies:
+                profile = self.profile_for(enemy)
+                perception = self.perception.update(
+                    enemy,
+                    self.game.player,
+                    profile,
+                    dt,
+                )
+                if perception.target_visible:
+                    self.squad.share_contact(
+                        enemy,
+                        alive_enemies,
+                        self._now,
+                        self.profile_for,
+                    )
+                decision = self.decisions.update(enemy, profile, perception, dt)
+                self.update_enemy(
+                    enemy,
+                    dt,
+                    EnemyUpdateContext(profile, perception, decision),
+                )
+        finally:
+            self._path_budget = None
+            self._shot_budget = None
+            self._planned_this_frame.clear()

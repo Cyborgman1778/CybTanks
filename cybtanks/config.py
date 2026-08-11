@@ -8,6 +8,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 ASSET_DIR = BASE_DIR / "assets"
 DATA_DIR = BASE_DIR / "data"
 ENEMY_DATA_FILE = DATA_DIR / "enemies.csv"
+AI_DATA_FILE = DATA_DIR / "ai_profiles.json"
 MAP_FILE = DATA_DIR / "map.txt"
 MAP_FILES = (
     MAP_FILE,
@@ -119,7 +120,15 @@ def _load_map(map_file: Path) -> tuple[tuple[int, ...], ...]:
 
 def _load_spawns() -> tuple[tuple[int, int], ...]:
     with SPAWN_DATA_FILE.open(encoding="utf-8", newline="") as data_file:
-        return tuple((int(row["col"]), int(row["row"])) for row in csv.DictReader(data_file))
+        reader = csv.DictReader(data_file)
+        if reader.fieldnames is None or not {"col", "row"}.issubset(reader.fieldnames):
+            raise ValueError(f"Missing columns in {SPAWN_DATA_FILE}")
+        spawns = tuple((int(row["col"]), int(row["row"])) for row in reader)
+    if not spawns:
+        raise ValueError(f"No enemy spawns in {SPAWN_DATA_FILE}")
+    if len(set(spawns)) != len(spawns):
+        raise ValueError(f"Duplicate enemy spawns in {SPAWN_DATA_FILE}")
+    return spawns
 
 
 MAP_LAYOUTS = tuple(_load_map(map_file) for map_file in MAP_FILES)
