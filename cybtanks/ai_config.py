@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, fields, replace
 from functools import lru_cache
 from typing import Any
@@ -52,6 +53,12 @@ class AIProfile:
     dodge_cooldown: float
     dodge_speed_multiplier: float
     dodge_direction_commitment: float
+    predictive_aim_enabled: bool
+    prediction_horizon: float
+    prediction_step: float
+    prediction_min_target_speed: float
+    prediction_iterations: int
+    prediction_max_ricochet_surfaces: int
     scan_speed: float
     scan_arc_degrees: float
     unpredictability: float
@@ -72,6 +79,7 @@ class InitialFireTiming:
 class GlobalAIConfig:
     max_path_plans_per_frame: int
     max_shot_plans_per_frame: int
+    max_predictive_shot_plans_per_frame: int
     max_attackers: int
     attack_slot_duration: float
     communication_range_tiles: float
@@ -184,6 +192,7 @@ def _validate_profile(profile_id: str, profile: AIProfile) -> None:
         profile.dodge_commit_time,
         profile.dodge_cooldown,
         profile.dodge_speed_multiplier,
+        profile.prediction_step,
         profile.scan_speed,
         profile.scan_arc_degrees,
     )
@@ -222,6 +231,32 @@ def _validate_profile(profile_id: str, profile: AIProfile) -> None:
         raise ValueError(f"Invalid ricochet error in AI profile {profile_id!r}")
     if profile.scan_arc_degrees > 360:
         raise ValueError(f"Invalid scan arc in AI profile {profile_id!r}")
+    if not isinstance(profile.predictive_aim_enabled, bool):
+        raise ValueError(f"Invalid predictive-aim flag in AI profile {profile_id!r}")
+    prediction_values = (
+        profile.prediction_horizon,
+        profile.prediction_step,
+        profile.prediction_min_target_speed,
+    )
+    if any(not math.isfinite(value) for value in prediction_values):
+        raise ValueError(f"Non-finite prediction value in AI profile {profile_id!r}")
+    if profile.prediction_horizon < 0 or profile.prediction_min_target_speed < 0:
+        raise ValueError(f"Invalid prediction range in AI profile {profile_id!r}")
+    if (
+        type(profile.prediction_iterations) is not int
+        or not 1 <= profile.prediction_iterations <= 16
+    ):
+        raise ValueError(f"Invalid prediction iterations in AI profile {profile_id!r}")
+    if (
+        type(profile.prediction_max_ricochet_surfaces) is not int
+        or profile.prediction_max_ricochet_surfaces < 0
+        or profile.prediction_max_ricochet_surfaces > 128
+    ):
+        raise ValueError(f"Invalid predictive ricochet budget in AI profile {profile_id!r}")
+    if profile.predictive_aim_enabled and profile.prediction_horizon <= 0:
+        raise ValueError(f"Predictive AI profile {profile_id!r} needs a horizon")
+    if math.ceil(profile.prediction_horizon / profile.prediction_step) > 256:
+        raise ValueError(f"Prediction sample budget exceeded in AI profile {profile_id!r}")
 
 
 def _timing_from_data(data: dict[str, Any], label: str) -> InitialFireTiming:
@@ -256,13 +291,19 @@ def _global_from_data(data: dict[str, Any]) -> GlobalAIConfig:
         for kind, timing in values["initial_fire_overrides"].items()
     }
     config = GlobalAIConfig(**values)
-    if (
-        config.max_path_plans_per_frame <= 0
-        or config.max_shot_plans_per_frame <= 0
-        or config.max_attackers <= 0
-    ):
+    frame_budgets = (
+        config.max_path_plans_per_frame,
+        config.max_shot_plans_per_frame,
+        config.max_predictive_shot_plans_per_frame,
+        config.max_attackers,
+    )
+    if any(type(value) is not int or not 1 <= value <= 64 for value in frame_budgets):
         raise ValueError("AI frame budgets must be positive")
-    if config.max_sound_events <= 0 or not config.sound_ranges_tiles:
+    if (
+        type(config.max_sound_events) is not int
+        or not 1 <= config.max_sound_events <= 1024
+        or not config.sound_ranges_tiles
+    ):
         raise ValueError("AI sound configuration cannot be empty")
     if any(radius <= 0 for radius in config.sound_ranges_tiles.values()):
         raise ValueError("AI sound ranges must be positive")
@@ -282,7 +323,12 @@ def _global_from_data(data: dict[str, Any]) -> GlobalAIConfig:
         raise ValueError("Invalid breakable-wall sound attenuation")
     if not 0 <= config.state_hysteresis <= 1:
         raise ValueError("Invalid AI state hysteresis")
-    if min(config.max_enemy_bullets, config.max_enemy_mines, config.max_enemy_bounces) < 0:
+    entity_limits = (
+        config.max_enemy_bullets,
+        config.max_enemy_mines,
+        config.max_enemy_bounces,
+    )
+    if any(type(value) is not int or not 0 <= value <= 64 for value in entity_limits):
         raise ValueError("Enemy entity limits cannot be negative")
     positive_values = (
         config.attack_slot_duration,

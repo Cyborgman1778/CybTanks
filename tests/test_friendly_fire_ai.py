@@ -661,7 +661,14 @@ class FinalShotSafetyTests(unittest.TestCase):
             ) -> bool:
                 return True
 
-            def trace_shot(self, shooter: Tank, angle: float, target: Tank) -> ShotTrace:
+            def trace_shot(
+                self,
+                shooter: Tank,
+                angle: float,
+                target: Tank,
+                *,
+                target_position_at=None,
+            ) -> ShotTrace:
                 self.traced_angles.append(angle)
                 return ShotTrace(ally_hit=True)
 
@@ -711,7 +718,14 @@ class FinalShotSafetyTests(unittest.TestCase):
             ) -> bool:
                 return True
 
-            def trace_shot(self, shooter: Tank, angle: float, target: Tank) -> ShotTrace:
+            def trace_shot(
+                self,
+                shooter: Tank,
+                angle: float,
+                target: Tank,
+                *,
+                target_position_at=None,
+            ) -> ShotTrace:
                 self.traced_angles.append(angle)
                 return ShotTrace()
 

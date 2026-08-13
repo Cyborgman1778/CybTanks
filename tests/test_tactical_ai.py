@@ -5,6 +5,7 @@ import unittest
 from types import SimpleNamespace
 
 from cybtanks.ai_config import load_ai_settings
+from cybtanks.catalog import load_enemy_catalog
 from cybtanks.ai_decision import TacticalDecision, UtilityDecisionSystem
 from cybtanks.ai_perception import PerceptionSnapshot, PerceptionSystem
 from cybtanks.ai_squad import SquadCoordinator
@@ -73,12 +74,115 @@ class AIConfigurationTests(unittest.TestCase):
     def test_profiles_and_runtime_budgets_are_validated(self) -> None:
         settings = load_ai_settings()
 
-        self.assertEqual(set(settings.profiles), {"medium_low", "medium", "tactical"})
+        self.assertEqual(
+            tuple(settings.profiles),
+            ("low", "medium_low", "medium", "high", "tactical"),
+        )
         self.assertGreater(settings.global_config.max_path_plans_per_frame, 0)
         self.assertGreater(settings.global_config.max_attackers, 0)
+        self.assertEqual(
+            settings.global_config.max_predictive_shot_plans_per_frame,
+            1,
+        )
         self.assertLess(
             settings.profile_for("dark_green", "medium").aim_tolerance_degrees,
             settings.profile_for("dark_gray", "medium_low").aim_tolerance_degrees,
+        )
+
+    def test_intelligence_profiles_follow_the_declared_skill_order(self) -> None:
+        settings = load_ai_settings()
+        profiles = [
+            settings.profiles[level]
+            for level in ("low", "medium_low", "medium", "high", "tactical")
+        ]
+
+        self.assertEqual(
+            [profile.vision_range_tiles for profile in profiles],
+            sorted(profile.vision_range_tiles for profile in profiles),
+        )
+        self.assertEqual(
+            [profile.reaction_time for profile in profiles],
+            sorted((profile.reaction_time for profile in profiles), reverse=True),
+        )
+        self.assertEqual(
+            [profile.decision_interval_near for profile in profiles],
+            sorted(
+                (profile.decision_interval_near for profile in profiles),
+                reverse=True,
+            ),
+        )
+        self.assertEqual(
+            [profile.aim_interval for profile in profiles],
+            sorted((profile.aim_interval for profile in profiles), reverse=True),
+        )
+        self.assertEqual(
+            [profile.max_ricochet_candidates for profile in profiles],
+            sorted(profile.max_ricochet_candidates for profile in profiles),
+        )
+        self.assertLess(profiles[-1].ricochet_error_max_degrees, profiles[-2].ricochet_error_max_degrees)
+
+    def test_only_high_and_tactical_enable_predictive_aim(self) -> None:
+        settings = load_ai_settings()
+
+        self.assertEqual(
+            {
+                level: profile.predictive_aim_enabled
+                for level, profile in settings.profiles.items()
+            },
+            {
+                "low": False,
+                "medium_low": False,
+                "medium": False,
+                "high": True,
+                "tactical": True,
+            },
+        )
+        self.assertGreater(
+            settings.profiles["tactical"].prediction_horizon,
+            settings.profiles["high"].prediction_horizon,
+        )
+        self.assertLess(
+            settings.profiles["tactical"].prediction_step,
+            settings.profiles["high"].prediction_step,
+        )
+
+    def test_prediction_horizon_does_not_round_up_to_a_full_step(self) -> None:
+        settings = load_ai_settings()
+        world = open_world()
+        enemy = make_tank(1, "enemy", (3, 4), intelligence="high")
+        player = make_tank(2, "player", (8, 4))
+        player.velocity = Vec2(0, 125)
+        game = SimpleNamespace(
+            world=world,
+            player=player,
+            enemies=[enemy],
+            mines=[],
+            bullets=[],
+        )
+        game.all_tanks = lambda: [player, enemy]
+        game.combat = CombatSystem(game)
+        ai = EnemyAISystem(game)
+
+        prediction = ai.target_prediction(enemy)
+
+        self.assertEqual(
+            prediction.horizon,
+            settings.profiles["high"].prediction_horizon,
+        )
+        self.assertIsNone(prediction.position_at(prediction.horizon + 0.000_001))
+
+    def test_enemies_use_the_configured_intelligence_assignments(self) -> None:
+        catalog = load_enemy_catalog()
+
+        self.assertEqual(
+            {kind: config["nivel_inteligencia"] for kind, config in catalog.items()},
+            {
+                "light_gray": "high",
+                "dark_gray": "medium_low",
+                "yellow": "medium_low",
+                "dark_green": "medium",
+                "pink": "tactical",
+            },
         )
 
 
@@ -711,6 +815,210 @@ class SquadAndDecisionTests(unittest.TestCase):
         self.assertLess(decision.threat, profile.retreat_threshold)
 
 
+class PredictiveShootingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.world = open_world()
+
+    def make_ai(
+        self,
+        enemy: Tank,
+        player: Tank,
+        enemies: list[Tank] | None = None,
+    ) -> EnemyAISystem:
+        game = SimpleNamespace(
+            world=self.world,
+            player=player,
+            enemies=enemies or [enemy],
+            mines=[],
+            bullets=[],
+            state="playing",
+            create_burst=lambda *args: None,
+            audio=SimpleNamespace(play_shot=lambda speed: None),
+        )
+        game.all_tanks = lambda: [player, *game.enemies]
+        game.combat = CombatSystem(game)
+        return EnemyAISystem(game)
+
+    def test_high_leads_a_perpendicular_moving_player(self) -> None:
+        enemy = make_tank(1, "enemy", (3, 6), intelligence="high")
+        player = make_tank(2, "player", (10, 6))
+        player.velocity = Vec2(0, 125)
+        ai = self.make_ai(enemy, player)
+        static_angle = math.atan2(
+            player.position.y - enemy.position.y,
+            player.position.x - enemy.position.x,
+        )
+
+        angle, ready = ai.choose_shot(enemy)
+
+        self.assertTrue(ready)
+        self.assertTrue(enemy.ai.aim_predictive)
+        self.assertEqual(enemy.ai.aim_expected_bounces, 0)
+        self.assertGreater(angle, static_angle + 0.05)
+        prediction = ai.target_prediction(enemy)
+        trace = ai.game.combat.trace_shot(
+            enemy,
+            angle,
+            player,
+            target_position_at=prediction.position_at,
+        )
+        self.assertTrue(trace.target_hit)
+        self.assertEqual(trace.target_bounces, 0)
+
+    def test_medium_keeps_current_position_aiming(self) -> None:
+        enemy = make_tank(1, "enemy", (3, 6), intelligence="medium")
+        player = make_tank(2, "player", (10, 6))
+        player.velocity = Vec2(0, 125)
+        ai = self.make_ai(enemy, player)
+        static_angle = math.atan2(
+            player.position.y - enemy.position.y,
+            player.position.x - enemy.position.x,
+        )
+
+        angle, ready = ai.choose_shot(enemy)
+
+        self.assertTrue(ready)
+        self.assertFalse(enemy.ai.aim_predictive)
+        self.assertAlmostEqual(angle, static_angle, places=4)
+
+    def test_prediction_stops_at_impassable_tank_geometry(self) -> None:
+        tiles = [row[:] for row in self.world.tiles]
+        tiles[8][10] = 3
+        self.world.reset(tuple(tuple(row) for row in tiles))
+        enemy = make_tank(1, "enemy", (3, 6), intelligence="tactical")
+        player = make_tank(2, "player", (10, 6))
+        player.velocity = Vec2(0, 125)
+        ai = self.make_ai(enemy, player)
+
+        prediction = ai.target_prediction(enemy)
+        future = prediction.position_at(prediction.horizon)
+
+        self.assertIsNotNone(future)
+        self.assertLess(future.y, 8 * 60 - TANK_HALF + 0.1)
+        self.assertFalse(self.world.tank_touches_wall(future))
+
+    def test_predictive_trace_still_rejects_friendly_fire(self) -> None:
+        enemy = make_tank(1, "enemy", (3, 6), intelligence="high")
+        player = make_tank(2, "player", (10, 6))
+        player.velocity = Vec2(0, 125)
+        ally = make_tank(3, "enemy", (2, 2), intelligence="medium")
+        ai = self.make_ai(enemy, player, [enemy, ally])
+        prediction = ai.target_prediction(enemy)
+        predictive_angle = ai.predictive_direct_shot_angle(enemy, prediction)
+        self.assertIsNotNone(predictive_angle)
+        direction = Vec2(math.cos(predictive_angle), math.sin(predictive_angle))
+        ally.position = ai.game.combat.safe_muzzle(enemy, predictive_angle) + direction * 180
+
+        trace = ai.game.combat.trace_shot(
+            enemy,
+            predictive_angle,
+            player,
+            target_position_at=prediction.position_at,
+        )
+
+        self.assertTrue(trace.ally_hit)
+        self.assertFalse(trace.target_hit)
+
+    def test_uncertain_future_push_cancels_predictive_shot(self) -> None:
+        enemy = make_tank(1, "enemy", (3, 6), intelligence="tactical")
+        player = make_tank(2, "player", (10, 6))
+        player.velocity = Vec2(0, 125)
+        blocker = make_tank(3, "enemy", (10, 8), intelligence="medium")
+        ai = self.make_ai(enemy, player, [enemy, blocker])
+
+        angle, ready = ai.choose_shot(enemy)
+
+        prediction = ai.target_prediction(enemy)
+        self.assertIsNotNone(prediction)
+        self.assertLess(
+            prediction.horizon,
+            ai.profile_for(enemy).prediction_horizon,
+        )
+        if ready:
+            trace = ai.game.combat.trace_shot(
+                enemy,
+                angle,
+                player,
+                target_position_at=prediction.position_at,
+            )
+            self.assertTrue(trace.target_hit)
+
+    def test_final_validation_cancels_obsolete_predictive_solution(self) -> None:
+        enemy = make_tank(1, "enemy", (3, 6), intelligence="high")
+        player = make_tank(2, "player", (10, 6))
+        player.velocity = Vec2(0, 125)
+        ai = self.make_ai(enemy, player)
+        angle, ready = ai.choose_shot(enemy)
+        self.assertTrue(ready)
+        enemy.aim_angle = angle
+        enemy.turret_angle = angle
+        enemy.aim_timer = 1.0
+        enemy.shot_ready = True
+        player.velocity.update(0, -125)
+        profile = ai.profile_for(enemy)
+        perception = PerceptionSnapshot(
+            target_position=player.position,
+            target_visible=True,
+            has_line_of_sight=True,
+            can_engage=True,
+            heard_contact=False,
+            remembered_contact=True,
+            just_confirmed=False,
+        )
+        decision = TacticalDecision("attack", player.position, 0.0, True)
+
+        ai.update_enemy(
+            enemy,
+            0.0,
+            EnemyUpdateContext(profile, perception, decision),
+        )
+
+        self.assertFalse(enemy.shot_ready)
+        self.assertFalse(enemy.ai.aim_predictive)
+        self.assertEqual(ai.game.bullets, [])
+
+    def test_runtime_bullet_hits_the_predicted_future_position(self) -> None:
+        enemy = make_tank(1, "enemy", (3, 4), intelligence="high")
+        enemy.max_bounces = 0
+        player = make_tank(2, "player", (8, 4))
+        player.velocity = Vec2(0, 125)
+        sounds = SimpleNamespace(
+            play_shot=lambda speed: None,
+            play_bullet_bounce=lambda: None,
+            play_bullet_disintegrate=lambda: None,
+        )
+        game = SimpleNamespace(
+            world=self.world,
+            player=player,
+            enemies=[enemy],
+            mines=[],
+            bullets=[],
+            state="playing",
+            audio=sounds,
+            create_burst=lambda *args: None,
+        )
+        game.all_tanks = lambda: [player, enemy]
+        game.destroy_tank = lambda tank: setattr(tank, "alive", False)
+        game.mine_system = SimpleNamespace(collide_bullet=lambda bullet: False)
+        game.combat = CombatSystem(game)
+        ai = EnemyAISystem(game)
+
+        angle, ready = ai.choose_shot(enemy)
+        self.assertTrue(ready)
+        self.assertTrue(enemy.ai.aim_predictive)
+        enemy.turret_angle = angle
+        self.assertTrue(game.combat.shoot(enemy))
+
+        dt = 1 / 120
+        for _ in range(360):
+            player.position += player.velocity * dt
+            game.combat.update(dt)
+            if not player.alive:
+                break
+
+        self.assertFalse(player.alive)
+
+
 class NavigationBudgetTests(unittest.TestCase):
     def setUp(self) -> None:
         self.world = open_world()
@@ -834,6 +1142,59 @@ class NavigationBudgetTests(unittest.TestCase):
             )
 
         self.assertEqual(len(calls), ai.settings.global_config.max_shot_plans_per_frame)
+
+    def test_production_caps_predictive_solutions_to_one_per_frame(self) -> None:
+        player = make_tank(100, "player", (8, 6))
+        player.velocity = Vec2(0, 125)
+        enemies = [
+            make_tank(index, "enemy", (index + 1, 2), intelligence="tactical")
+            for index in range(1, 5)
+        ]
+        combat = SimpleNamespace(
+            active_bullets=lambda tank: 0,
+            can_shoot=lambda tank: True,
+            movement_safe_from_friendly_fire=lambda tank, movement: True,
+        )
+        game = SimpleNamespace(
+            world=self.world,
+            player=player,
+            enemies=enemies,
+            mines=[],
+            bullets=[],
+            combat=combat,
+        )
+        game.all_tanks = lambda: [player, *enemies]
+        ai = EnemyAISystem(game)
+        ai._shot_budget = ai.settings.global_config.max_shot_plans_per_frame
+        ai._predictive_shot_budget = (
+            ai.settings.global_config.max_predictive_shot_plans_per_frame
+        )
+        calls = []
+
+        def no_solution(enemy: Tank) -> tuple[float, bool]:
+            calls.append(enemy.tank_id)
+            return 0.0, False
+
+        ai.choose_shot = no_solution
+        perception = PerceptionSnapshot(
+            target_position=player.position,
+            target_visible=True,
+            has_line_of_sight=True,
+            can_engage=True,
+            heard_contact=False,
+            remembered_contact=True,
+            just_confirmed=False,
+        )
+        for enemy in enemies:
+            profile = ai.profile_for(enemy)
+            decision = TacticalDecision("attack", player.position, 0.0, True)
+            ai.update_enemy(
+                enemy,
+                0.0,
+                EnemyUpdateContext(profile, perception, decision),
+            )
+
+        self.assertEqual(calls, [enemies[0].tank_id])
 
     def test_mine_escape_prefers_a_route_that_never_moves_closer(self) -> None:
         enemy = make_tank(1, "enemy", (4, 6), speed=58.0)

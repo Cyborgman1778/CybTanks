@@ -44,6 +44,10 @@ py main.py
 
 `data/ai_profiles.json` es la fuente de configuración de inteligencia. Define perfiles base por `nivel_inteligencia`, ajustes concretos por arquetipo y límites globales. El cargador rechaza campos desconocidos, perfiles incompletos, probabilidades fuera de rango, distancias incoherentes y límites de entidades que puedan degradar el rendimiento.
 
+Los niveles disponibles, de menor a mayor capacidad, son `low`, `medium_low`, `medium`, `high` y `tactical`. `high` queda cerca de `tactical`, pero conserva tiempos de reacción, decisión y puntería ligeramente peores. El gris claro usa `high`, el gris oscuro y el amarillo usan `medium_low`, el verde oscuro usa `medium` y el rosado usa `tactical`. Ningún enemigo utiliza todavía `low`.
+
+Los perfiles `high` y `tactical` pueden anticipar blancos móviles. Proyectan la trayectoria actual del jugador respetando paredes, hoyos y colisiones, calculan el tiempo de llegada del proyectil y apuntan a la posición futura de intercepción cuando ofrece una solución más útil. La capacidad también contempla disparos con rebote. `tactical` usa un horizonte mayor, más iteraciones y pasos temporales más precisos que `high`. La solución se vuelve a validar justo antes del disparo y se cancela si el jugador cambia de trayectoria o aparece riesgo de autorimpacto o fuego amigo.
+
 ## IA Táctica
 
 Cada enemigo mantiene una memoria independiente y decide mediante Utility AI entre vigilancia, investigación, búsqueda, ataque, flanqueo, cobertura, retirada y evasión. La decisión considera visibilidad real, distancia, proyectiles entrantes, exposición, rol de escuadrón, agresividad y estado del escudo. Como el juego no tiene salud parcial, la retirada se activa por amenaza alta y por pérdida de una protección disponible, sin cambiar la regla existente de muerte de un impacto.

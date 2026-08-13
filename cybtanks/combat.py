@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING
 
 from .config import (
@@ -81,8 +81,12 @@ class CombatSystem:
 
     @staticmethod
     def circle_touches_tank(position: Vec2, tank: Tank) -> bool:
-        nearest_x = clamp(position.x, tank.position.x - TANK_HALF, tank.position.x + TANK_HALF)
-        nearest_y = clamp(position.y, tank.position.y - TANK_HALF, tank.position.y + TANK_HALF)
+        return CombatSystem.circle_touches_tank_position(position, tank.position)
+
+    @staticmethod
+    def circle_touches_tank_position(position: Vec2, tank_position: Vec2) -> bool:
+        nearest_x = clamp(position.x, tank_position.x - TANK_HALF, tank_position.x + TANK_HALF)
+        nearest_y = clamp(position.y, tank_position.y - TANK_HALF, tank_position.y + TANK_HALF)
         return position.distance_squared_to((nearest_x, nearest_y)) <= BULLET_RADIUS**2
 
     def safe_muzzle(self, tank: Tank, angle: float | None = None) -> Vec2:
@@ -211,7 +215,14 @@ class CombatSystem:
                 return True
         return False
 
-    def trace_shot(self, shooter: Tank, angle: float, target: Tank) -> ShotTrace:
+    def trace_shot(
+        self,
+        shooter: Tank,
+        angle: float,
+        target: Tank,
+        *,
+        target_position_at: Callable[[float], Vec2 | None] | None = None,
+    ) -> ShotTrace:
         trace = ShotTrace()
         position = self.safe_muzzle(shooter, angle)
         direction = Vec2(math.cos(angle), math.sin(angle))
@@ -239,7 +250,16 @@ class CombatSystem:
                 trace.self_hit = True
                 return trace
 
-            if target.alive and self.circle_touches_tank(position, target):
+            target_position = (
+                target_position_at(distance / shooter.bullet_speed)
+                if target_position_at is not None and shooter.bullet_speed > 0.0
+                else target.position
+            )
+            if (
+                target.alive
+                and target_position is not None
+                and self.circle_touches_tank_position(position, target_position)
+            ):
                 target_result = (bounces, distance)
                 previous = position.copy()
                 break

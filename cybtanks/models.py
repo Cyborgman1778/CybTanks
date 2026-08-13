@@ -38,6 +38,9 @@ class EnemyMemory:
     dodge_timer: float = 0.0
     dodge_cooldown: float = 0.0
     dodge_direction: Vec2 = field(default_factory=Vec2)
+    aim_predictive: bool = False
+    aim_requires_hit: bool = False
+    aim_expected_bounces: int = -1
 
 
 @dataclass

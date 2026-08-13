@@ -35,6 +35,23 @@ class EnemyUpdateContext:
     decision: TacticalDecision
 
 
+@dataclass(frozen=True, slots=True)
+class TargetPrediction:
+    positions: tuple[Vec2, ...]
+    step: float
+    horizon: float
+
+    def position_at(self, time: float) -> Vec2 | None:
+        if time < 0.0 or time > self.horizon or not self.positions:
+            return None
+        if len(self.positions) == 1:
+            return self.positions[0].copy()
+        sample = time / self.step
+        index = min(int(sample), len(self.positions) - 2)
+        fraction = min(1.0, max(0.0, sample - index))
+        return self.positions[index].lerp(self.positions[index + 1], fraction)
+
+
 class EnemyAISystem:
     def __init__(self, game: Game) -> None:
         self.game = game
@@ -51,6 +68,7 @@ class EnemyAISystem:
         ] = {}
         self._path_budget: int | None = None
         self._shot_budget: int | None = None
+        self._predictive_shot_budget: int | None = None
         self._planned_this_frame: set[int] = set()
         self._update_cursor = 0
         self._now = 0.0
@@ -69,6 +87,7 @@ class EnemyAISystem:
         self._cell_metrics_cache.clear()
         self._path_budget = None
         self._shot_budget = None
+        self._predictive_shot_budget = None
         self._planned_this_frame.clear()
         self._update_cursor = 0
         self._now = 0.0
@@ -137,6 +156,297 @@ class EnemyAISystem:
         self._cell_metrics_cache[key] = metrics
         return metrics
 
+    def _prediction_position_clear(
+        self,
+        target: Tank,
+        position: Vec2,
+        blockers: tuple[Tank, ...],
+    ) -> tuple[bool, bool]:
+        if self.game.world.tank_touches_wall(position):
+            return False, False
+        minimum_distance_squared = (TANK_HALF * 2) ** 2
+        uncertain_collision = any(
+            tank.alive
+            and tank.tank_id != target.tank_id
+            and position.distance_squared_to(tank.position) < minimum_distance_squared
+            for tank in blockers
+        )
+        return not uncertain_collision, uncertain_collision
+
+    def target_prediction(
+        self,
+        enemy: Tank,
+        *,
+        ignore_speed_threshold: bool = False,
+    ) -> TargetPrediction | None:
+        profile = self.profile_for(enemy)
+        target = self.game.player
+        if (
+            not profile.predictive_aim_enabled
+            or not target.alive
+            or (
+                not ignore_speed_threshold
+                and target.velocity.length() < profile.prediction_min_target_speed
+            )
+        ):
+            return None
+
+        position = target.position.copy()
+        velocity = target.velocity.copy()
+        steps = max(1, math.ceil(profile.prediction_horizon / profile.prediction_step))
+        blockers = tuple(self.game.all_tanks())
+        positions = [position.copy()]
+        for _ in range(steps):
+            next_position = position.copy()
+            next_position.x += velocity.x * profile.prediction_step
+            x_clear, x_uncertain = self._prediction_position_clear(
+                target,
+                next_position,
+                blockers,
+            )
+            if x_uncertain:
+                break
+            if not x_clear:
+                next_position.x = position.x
+            next_position.y += velocity.y * profile.prediction_step
+            y_clear, y_uncertain = self._prediction_position_clear(
+                target,
+                next_position,
+                blockers,
+            )
+            if y_uncertain:
+                break
+            if not y_clear:
+                next_position.y = position.y
+            position = next_position
+            positions.append(position.copy())
+        horizon = min(
+            profile.prediction_horizon,
+            (len(positions) - 1) * profile.prediction_step,
+        )
+        return TargetPrediction(
+            positions=tuple(positions),
+            step=profile.prediction_step,
+            horizon=horizon,
+        )
+
+    @staticmethod
+    def _linear_intercept_time(
+        origin: Vec2,
+        target_position: Vec2,
+        target_velocity: Vec2,
+        projectile_speed: float,
+    ) -> float | None:
+        relative = target_position - origin
+        a = target_velocity.length_squared() - projectile_speed**2
+        b = 2.0 * relative.dot(target_velocity)
+        c = relative.length_squared()
+        if abs(a) <= 0.000_001:
+            if abs(b) <= 0.000_001:
+                return 0.0 if c <= 0.000_001 else None
+            time = -c / b
+            return time if time > 0.0 else None
+        discriminant = b * b - 4.0 * a * c
+        if discriminant < 0.0:
+            return None
+        root = math.sqrt(discriminant)
+        times = [
+            time
+            for time in ((-b - root) / (2.0 * a), (-b + root) / (2.0 * a))
+            if time > 0.0
+        ]
+        return min(times) if times else None
+
+    def _predictive_direct_candidates(
+        self,
+        enemy: Tank,
+        prediction: TargetPrediction,
+    ) -> list[tuple[float, float]]:
+        profile = self.profile_for(enemy)
+        intercept_time = self._linear_intercept_time(
+            enemy.position,
+            self.game.player.position,
+            self.game.player.velocity,
+            enemy.bullet_speed,
+        )
+        if intercept_time is None:
+            return []
+        intercept_time = min(intercept_time, prediction.horizon)
+
+        origin = enemy.position
+        for _ in range(profile.prediction_iterations):
+            future_position = prediction.position_at(intercept_time)
+            if future_position is None:
+                return []
+            difference = future_position - origin
+            if difference.length_squared() == 0.0:
+                return []
+            angle = math.atan2(difference.y, difference.x)
+            origin = self.game.combat.safe_muzzle(enemy, angle)
+            intercept_time = origin.distance_to(future_position) / enemy.bullet_speed
+            intercept_time = min(intercept_time, prediction.horizon)
+
+        future_position = prediction.position_at(intercept_time)
+        if future_position is None:
+            return []
+        difference = future_position - origin
+        if difference.length_squared() == 0.0:
+            return []
+        perpendicular = Vec2(-difference.y, difference.x).normalize()
+        candidates = []
+        for offset in self.settings.global_config.direct_aim_offsets_px:
+            aim_point = future_position + perpendicular * offset
+            if not self.game.world.clear_segment(
+                enemy.position,
+                aim_point,
+                BULLET_RADIUS + 1.0,
+            ):
+                continue
+            angle = math.atan2(
+                aim_point.y - enemy.position.y,
+                aim_point.x - enemy.position.x,
+            )
+            trace = self.game.combat.trace_shot(
+                enemy,
+                angle,
+                self.game.player,
+                target_position_at=prediction.position_at,
+            )
+            if (
+                trace.target_hit
+                and trace.target_bounces == 0
+                and not trace.self_hit
+                and not trace.ally_hit
+            ):
+                candidates.append((trace.target_distance, angle))
+                if offset == 0:
+                    break
+        return candidates
+
+    def predictive_direct_shot_angle(
+        self,
+        enemy: Tank,
+        prediction: TargetPrediction,
+    ) -> float | None:
+        candidates = self._predictive_direct_candidates(enemy, prediction)
+        return min(candidates)[1] if candidates else None
+
+    def predictive_ricochet_angles(
+        self,
+        enemy: Tank,
+        prediction: TargetPrediction,
+    ) -> list[float]:
+        if enemy.max_bounces <= 0:
+            return []
+        profile = self.profile_for(enemy)
+        candidates = []
+        seen: set[int] = set()
+        predicted_endpoint = prediction.position_at(prediction.horizon)
+
+        def surface_cost(surface: tuple[str, float, float, float]) -> float:
+            axis, coordinate, minimum, maximum = surface
+            if axis == "x":
+                bounce_point = Vec2(
+                    coordinate,
+                    clamp(predicted_endpoint.y, minimum, maximum),
+                )
+            else:
+                bounce_point = Vec2(
+                    clamp(predicted_endpoint.x, minimum, maximum),
+                    coordinate,
+                )
+            return enemy.position.distance_to(bounce_point) + bounce_point.distance_to(
+                predicted_endpoint
+            )
+
+        ordered_surfaces = sorted(
+            self.game.world.bounce_surfaces,
+            key=surface_cost,
+        )
+        surface_limit = profile.prediction_max_ricochet_surfaces
+        surfaces = ordered_surfaces[:surface_limit]
+        for axis, coordinate, minimum, maximum in surfaces:
+            intercept_time = enemy.position.distance_to(self.game.player.position) / enemy.bullet_speed
+            angle = 0.0
+            valid = True
+            for _ in range(profile.prediction_iterations):
+                target_position = prediction.position_at(intercept_time)
+                if target_position is None:
+                    valid = False
+                    break
+                if axis == "x":
+                    mirrored = Vec2(coordinate * 2.0 - target_position.x, target_position.y)
+                else:
+                    mirrored = Vec2(target_position.x, coordinate * 2.0 - target_position.y)
+                delta = mirrored - enemy.position
+                if delta.length_squared() == 0.0:
+                    valid = False
+                    break
+                angle = math.atan2(delta.y, delta.x)
+                origin = self.game.combat.safe_muzzle(enemy, angle)
+                unfolded_distance = origin.distance_to(mirrored)
+                intercept_time = unfolded_distance / enemy.bullet_speed
+                if intercept_time > prediction.horizon:
+                    valid = False
+                    break
+            if not valid:
+                continue
+
+            target_position = prediction.position_at(intercept_time)
+            if target_position is None:
+                continue
+            origin = self.game.combat.safe_muzzle(enemy, angle)
+            if axis == "x":
+                mirrored = Vec2(coordinate * 2.0 - target_position.x, target_position.y)
+                delta = mirrored - origin
+                if abs(delta.x) < 0.001:
+                    continue
+                ratio = (coordinate - origin.x) / delta.x
+                along = origin.y + delta.y * ratio
+            else:
+                mirrored = Vec2(target_position.x, coordinate * 2.0 - target_position.y)
+                delta = mirrored - origin
+                if abs(delta.y) < 0.001:
+                    continue
+                ratio = (coordinate - origin.y) / delta.y
+                along = origin.x + delta.x * ratio
+            corner_margin = BULLET_RADIUS + 4.0
+            if (
+                not 0.0 < ratio < 1.0
+                or not minimum + corner_margin < along < maximum - corner_margin
+            ):
+                continue
+            angle = math.atan2(mirrored.y - enemy.position.y, mirrored.x - enemy.position.x)
+            angle_key = round(angle * 10_000)
+            if angle_key in seen:
+                continue
+            seen.add(angle_key)
+            candidates.append((intercept_time, angle))
+        candidates.sort()
+        return [angle for _, angle in candidates]
+
+    def predictive_ricochet_angle(
+        self,
+        enemy: Tank,
+        prediction: TargetPrediction,
+    ) -> float | None:
+        candidate_limit = self.profile_for(enemy).max_ricochet_candidates
+        for angle in self.predictive_ricochet_angles(enemy, prediction)[:candidate_limit]:
+            trace = self.game.combat.trace_shot(
+                enemy,
+                angle,
+                self.game.player,
+                target_position_at=prediction.position_at,
+            )
+            if (
+                trace.target_hit
+                and trace.target_bounces == 1
+                and not trace.self_hit
+                and not trace.ally_hit
+            ):
+                return angle
+        return None
+
     def direct_shot_angle(self, enemy: Tank) -> float | None:
         difference = self.game.player.position - enemy.position
         if difference.length_squared() == 0:
@@ -197,14 +507,83 @@ class EnemyAISystem:
         return None
 
     def choose_shot(self, enemy: Tank) -> tuple[float, bool]:
+        enemy.ai.aim_predictive = False
+        enemy.ai.aim_requires_hit = False
+        enemy.ai.aim_expected_bounces = -1
+        profile = self.profile_for(enemy)
+        prediction = self.target_prediction(enemy)
+        prediction_required = (
+            profile.predictive_aim_enabled
+            and self.game.player.velocity.length()
+            >= profile.prediction_min_target_speed
+        )
+        if prediction_required and prediction is None:
+            fallback = math.atan2(
+                self.game.player.position.y - enemy.position.y,
+                self.game.player.position.x - enemy.position.x,
+            )
+            return fallback, False
+        if prediction is not None:
+            direct_angle = self.predictive_direct_shot_angle(enemy, prediction)
+            if direct_angle is not None:
+                enemy.ai.aim_predictive = True
+                enemy.ai.aim_requires_hit = True
+                enemy.ai.aim_expected_bounces = 0
+                return direct_angle, True
+
+            ricochet_angle = self.predictive_ricochet_angle(enemy, prediction)
+            fallback_position = prediction.position_at(prediction.horizon)
+            fallback = math.atan2(
+                fallback_position.y - enemy.position.y,
+                fallback_position.x - enemy.position.x,
+            )
+            if ricochet_angle is not None and (
+                enemy.ricochet_accuracy == "accurate"
+                or random.random() < enemy.ricochet_success_rate
+            ):
+                enemy.ai.aim_predictive = True
+                enemy.ai.aim_requires_hit = True
+                enemy.ai.aim_expected_bounces = 1
+                return ricochet_angle, True
+
+            if ricochet_angle is not None:
+                for _ in range(profile.ricochet_error_attempts):
+                    error = random.choice((-1, 1)) * math.radians(
+                        random.uniform(
+                            profile.ricochet_error_min_degrees,
+                            profile.ricochet_error_max_degrees,
+                        )
+                    )
+                    inaccurate_angle = ricochet_angle + error
+                    trace = self.game.combat.trace_shot(
+                        enemy,
+                        inaccurate_angle,
+                        self.game.player,
+                        target_position_at=prediction.position_at,
+                    )
+                    if not trace.self_hit and not trace.ally_hit:
+                        enemy.ai.aim_predictive = True
+                        enemy.ai.aim_requires_hit = False
+                        return inaccurate_angle, True
+            predicted_fallback = fallback
+        else:
+            predicted_fallback = None
+
+        if prediction_required:
+            return predicted_fallback, False
+
         direct_angle = self.direct_shot_angle(enemy)
         if direct_angle is not None:
             return direct_angle, True
 
         ricochet_angle = self.accurate_ricochet_angle(enemy)
-        fallback = math.atan2(
-            self.game.player.position.y - enemy.position.y,
-            self.game.player.position.x - enemy.position.x,
+        fallback = (
+            predicted_fallback
+            if predicted_fallback is not None
+            else math.atan2(
+                self.game.player.position.y - enemy.position.y,
+                self.game.player.position.x - enemy.position.x,
+            )
         )
         if ricochet_angle is None:
             return fallback, False
@@ -1204,7 +1583,27 @@ class EnemyAISystem:
         elif needs_solution:
             if managed_update and self._shot_budget is not None:
                 self._shot_budget -= 1
-            enemy.aim_angle, enemy.shot_ready = self.choose_shot(enemy)
+            predictive_profile = (
+                profile.predictive_aim_enabled
+                and self.game.player.velocity.length()
+                >= profile.prediction_min_target_speed
+            )
+            predictive_budget_available = (
+                not managed_update
+                or self._predictive_shot_budget is None
+                or self._predictive_shot_budget > 0
+            )
+            if predictive_profile and not predictive_budget_available:
+                enemy.aim_angle = direct_angle
+                enemy.shot_ready = False
+            else:
+                if (
+                    managed_update
+                    and predictive_profile
+                    and self._predictive_shot_budget is not None
+                ):
+                    self._predictive_shot_budget -= 1
+                enemy.aim_angle, enemy.shot_ready = self.choose_shot(enemy)
             enemy.aim_timer = profile.aim_interval
             if managed_update and not enemy.shot_ready:
                 self.squad.release_attack_slot(enemy.tank_id)
@@ -1219,21 +1618,67 @@ class EnemyAISystem:
         turret_ready = abs(angle_difference(desired_angle, enemy.turret_angle)) < aim_tolerance
 
         if enemy.fire_timer <= 0 and enemy.shot_ready and turret_ready:
+            prediction = (
+                self.target_prediction(enemy, ignore_speed_threshold=True)
+                if enemy.ai.aim_predictive
+                else None
+            )
+            predictive_target = (
+                prediction.position_at
+                if prediction is not None
+                else (
+                    (lambda _time: self.game.player.position.copy())
+                    if enemy.ai.aim_predictive
+                    else None
+                )
+            )
             safety_check = self.game.combat.trace_shot(
                 enemy,
                 enemy.turret_angle,
                 self.game.player,
+                **(
+                    {"target_position_at": predictive_target}
+                    if predictive_target is not None
+                    else {}
+                ),
             )
-            if safety_check.self_hit or safety_check.ally_hit:
+            predictive_target_lost = (
+                enemy.ai.aim_predictive
+                and (
+                    predictive_target is None
+                    or (
+                        enemy.ai.aim_requires_hit
+                        and not safety_check.target_hit
+                    )
+                    or (
+                        enemy.ai.aim_requires_hit
+                        and
+                        enemy.ai.aim_expected_bounces >= 0
+                        and safety_check.target_bounces
+                        != enemy.ai.aim_expected_bounces
+                    )
+                )
+            )
+            if (
+                safety_check.self_hit
+                or safety_check.ally_hit
+                or predictive_target_lost
+            ):
                 if managed_update:
                     self.squad.release_attack_slot(enemy.tank_id)
                 enemy.aim_timer = 0
                 enemy.shot_ready = False
+                enemy.ai.aim_predictive = False
+                enemy.ai.aim_requires_hit = False
+                enemy.ai.aim_expected_bounces = -1
                 return
         if enemy.fire_timer <= 0 and enemy.shot_ready and turret_ready and self.game.combat.shoot(enemy):
             enemy.fire_timer = FIRE_RATE_DELAYS[enemy.fire_rate]
             enemy.aim_timer = 0
             enemy.shot_ready = False
+            enemy.ai.aim_predictive = False
+            enemy.ai.aim_requires_hit = False
+            enemy.ai.aim_expected_bounces = -1
 
     def allies_safe_from_new_mine(self, enemy: Tank) -> bool:
         danger_distance = MINE_EXPLOSION_RADIUS + TANK_HALF + MINE_ESCAPE_MARGIN
@@ -1264,6 +1709,9 @@ class EnemyAISystem:
         self.game.combat.prepare_friendly_fire_paths("enemy")
         self._path_budget = self.settings.global_config.max_path_plans_per_frame
         self._shot_budget = self.settings.global_config.max_shot_plans_per_frame
+        self._predictive_shot_budget = (
+            self.settings.global_config.max_predictive_shot_plans_per_frame
+        )
         self._planned_this_frame.clear()
         if alive_enemies:
             start = self._update_cursor % len(alive_enemies)
@@ -1298,4 +1746,5 @@ class EnemyAISystem:
         finally:
             self._path_budget = None
             self._shot_budget = None
+            self._predictive_shot_budget = None
             self._planned_this_frame.clear()
