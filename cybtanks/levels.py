@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import random
 
-from .config import ENEMY_SPAWNS, MAP_LAYOUTS
+from .config import ENEMY_SPAWNS, MAP_ENEMY_LAYOUTS, MAP_LAYOUTS, MAP_PLAYER_SPAWNS
 from .models import GridCell
 
 
@@ -17,8 +17,20 @@ def map_layout(level: int) -> tuple[tuple[int, ...], ...]:
     return MAP_LAYOUTS[(level - 1) % len(MAP_LAYOUTS)]
 
 
+def player_spawn(level: int) -> GridCell:
+    """Return the map-specific player spawn or the legacy starting cell."""
+    if level < 1:
+        raise ValueError("Level numbers start at 1")
+    return MAP_PLAYER_SPAWNS[(level - 1) % len(MAP_LAYOUTS)] or (1, 1)
+
+
 def enemy_layout(level: int) -> list[tuple[str, GridCell]]:
     """Build the enemy types and spawn positions for an unlimited level number."""
+    if level < 1:
+        raise ValueError("Level numbers start at 1")
+    custom_layout = MAP_ENEMY_LAYOUTS[(level - 1) % len(MAP_LAYOUTS)]
+    if custom_layout is not None:
+        return list(custom_layout)
     enemy_count = min(len(ENEMY_SPAWNS), 2 + (level - 1) // 2)
     special_slots = enemy_count - (2 if level >= 3 else 1)
     green_count = min(3, special_slots, max(0, (level - 5) // 3))

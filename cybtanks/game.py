@@ -30,7 +30,7 @@ from .config import (
 )
 from .enemy_ai import EnemyAISystem
 from .geometry import clamp
-from .levels import enemy_layout, map_layout, shielded_dark_gray_count
+from .levels import enemy_layout, map_layout, player_spawn, shielded_dark_gray_count
 from .mines import MineSystem
 from .models import Bullet, ExplosionEffect, Mine, Particle, Tank, TrackMark, Vec2
 from .renderer import Renderer
@@ -164,7 +164,8 @@ class Game:
         self.track_marks = []
         self.track_progress = {}
         self.wrecks = []
-        self.player = self.make_tank("player", 1, 1)
+        self.player_spawn_cell = player_spawn(self.level)
+        self.player = self.make_tank("player", *self.player_spawn_cell)
 
         self.enemies = []
         shielded_remaining = shielded_dark_gray_count(self.level)
@@ -213,14 +214,14 @@ class Game:
             enemy.shield_flash = 0
             self.enemy_ai.initialize_enemy(enemy, index)
 
-        self.player = self.make_tank("player", 1, 1)
+        self.player = self.make_tank("player", *self.player_spawn_cell)
         self.player.position = cell_center(self.safe_respawn_cell())
         self.state = "playing"
 
     def safe_respawn_cell(self) -> tuple[int, int]:
         candidates = []
-        for row in range(1, len(self.world.tiles) - 1):
-            for col in range(1, len(self.world.tiles[row]) - 1):
+        for row in range(len(self.world.tiles)):
+            for col in range(len(self.world.tiles[row])):
                 cell = (col, row)
                 if self.world.is_wall(cell):
                     continue
@@ -230,9 +231,11 @@ class Game:
                     for enemy in self.enemies
                 ):
                     continue
-                distance_from_start = abs(col - 1) + abs(row - 1)
+                distance_from_start = abs(col - self.player_spawn_cell[0]) + abs(
+                    row - self.player_spawn_cell[1]
+                )
                 candidates.append((distance_from_start, cell))
-        return min(candidates)[1] if candidates else (1, 1)
+        return min(candidates)[1] if candidates else self.player_spawn_cell
 
     def all_tanks(self) -> list[Tank]:
         return [self.player, *self.enemies]

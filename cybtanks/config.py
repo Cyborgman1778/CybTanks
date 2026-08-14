@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -104,18 +105,83 @@ ASSET_NAMES = (
 )
 
 
-def _load_map(map_file: Path) -> tuple[tuple[int, ...], ...]:
+CUSTOM_ENEMY_KINDS = frozenset(
+    {"light_gray", "dark_gray", "yellow", "dark_green", "pink"}
+)
+
+
+@dataclass(frozen=True)
+class MapDefinition:
+    layout: tuple[tuple[int, ...], ...]
+    player_spawn: tuple[int, int] | None = None
+    enemy_layout: tuple[tuple[str, tuple[int, int]], ...] | None = None
+
+
+def _load_map(map_file: Path) -> MapDefinition:
     rows = []
-    for raw_line in map_file.read_text(encoding="utf-8").splitlines():
+    player_spawn = None
+    enemy_layout = []
+    custom_spawns = False
+    for line_number, raw_line in enumerate(
+        map_file.read_text(encoding="utf-8").splitlines(),
+        start=1,
+    ):
         line = raw_line.strip()
-        if not line or line.startswith("#"):
+        if not line:
+            continue
+        if line.startswith("#"):
+            key, separator, value = line[1:].partition("=")
+            key = key.strip().lower()
+            if not separator or key not in {"player_spawn", "enemy_spawn"}:
+                continue
+            custom_spawns = True
+            parts = tuple(part.strip() for part in value.split(","))
+            try:
+                if key == "player_spawn":
+                    if len(parts) != 2:
+                        raise ValueError
+                    if player_spawn is not None:
+                        raise ValueError(
+                            f"Duplicate player spawn in {map_file} on line {line_number}"
+                        )
+                    player_spawn = (int(parts[0]), int(parts[1]))
+                else:
+                    if len(parts) != 3 or parts[0] not in CUSTOM_ENEMY_KINDS:
+                        raise ValueError
+                    enemy_layout.append(
+                        (parts[0], (int(parts[1]), int(parts[2])))
+                    )
+            except ValueError as error:
+                if str(error).startswith("Duplicate player spawn"):
+                    raise
+                raise ValueError(
+                    f"Invalid {key} metadata in {map_file} on line {line_number}"
+                ) from error
             continue
         if set(line) - {"0", "1", "2", "3"}:
             raise ValueError(f"Invalid character in {map_file}: {line!r}")
         rows.append(tuple(int(value) for value in line))
     if not rows or any(len(row) != len(rows[0]) for row in rows):
         raise ValueError(f"Invalid map dimensions in {map_file}")
-    return tuple(rows)
+    layout = tuple(rows)
+    if not custom_spawns:
+        return MapDefinition(layout)
+    if player_spawn is None:
+        raise ValueError(f"Missing player_spawn metadata in {map_file}")
+
+    occupied = {player_spawn}
+    for kind, spawn in enemy_layout:
+        if spawn in occupied:
+            raise ValueError(f"Duplicate tank spawn {spawn} in {map_file}")
+        occupied.add(spawn)
+    for col, row in occupied:
+        if (
+            not 0 <= row < len(layout)
+            or not 0 <= col < len(layout[row])
+            or layout[row][col] != 0
+        ):
+            raise ValueError(f"Invalid tank spawn ({col}, {row}) in {map_file}")
+    return MapDefinition(layout, player_spawn, tuple(enemy_layout))
 
 
 def _load_spawns() -> tuple[tuple[int, int], ...]:
@@ -131,7 +197,10 @@ def _load_spawns() -> tuple[tuple[int, int], ...]:
     return spawns
 
 
-MAP_LAYOUTS = tuple(_load_map(map_file) for map_file in MAP_FILES)
+MAP_DEFINITIONS = tuple(_load_map(map_file) for map_file in MAP_FILES)
+MAP_LAYOUTS = tuple(definition.layout for definition in MAP_DEFINITIONS)
+MAP_PLAYER_SPAWNS = tuple(definition.player_spawn for definition in MAP_DEFINITIONS)
+MAP_ENEMY_LAYOUTS = tuple(definition.enemy_layout for definition in MAP_DEFINITIONS)
 MAP = MAP_LAYOUTS[0]
 ROWS = len(MAP)
 COLS = len(MAP[0])
@@ -142,7 +211,13 @@ BOARD_HEIGHT = ROWS * TILE
 WINDOW_SIZE = (BOARD_WIDTH, BOARD_HEIGHT + HUD_HEIGHT)
 ENEMY_SPAWNS = _load_spawns()
 
-for map_file, layout in zip(MAP_FILES, MAP_LAYOUTS):
+for map_file, layout, custom_enemy_layout in zip(
+    MAP_FILES,
+    MAP_LAYOUTS,
+    MAP_ENEMY_LAYOUTS,
+):
+    if custom_enemy_layout is not None:
+        continue
     for col, row in ENEMY_SPAWNS:
         if not 0 <= col < COLS or not 0 <= row < ROWS or layout[row][col] != 0:
             raise ValueError(f"Invalid enemy spawn ({col}, {row}) in {map_file}")
