@@ -9,6 +9,26 @@ py -m pip install pygame
 py main.py
 ```
 
+## Controles
+
+El dispositivo activo cambia en tiempo real con la ultima entrada recibida. Se puede conectar o desconectar un mando durante la partida sin reiniciar el juego.
+
+| Accion | Teclado y raton | Mando |
+| --- | --- | --- |
+| Mover | `WASD` o flechas | Stick izquierdo |
+| Apuntar | Cursor | Stick derecho |
+| Disparar | Clic izquierdo | `RT` o `RB` / `R1` |
+| Colocar mina | `Espacio`, `Shift` o `E` | `LT` o `A` / Cross |
+| Confirmar pantalla | `Enter` o clic | `A` / Cross |
+
+Los sticks usan una zona muerta radial de `0.18` y conservan todo su rango analogico: una inclinacion parcial mueve el tanque a velocidad parcial y cualquier angulo intermedio produce movimiento diagonal continuo. El stick derecho desplaza una reticula libre por todo el mapa; al soltarlo, la reticula conserva su posicion mundial. Durante la partida `A` coloca una mina y, en las pantallas finales, confirma el siguiente nivel o el reinicio.
+
+## Pruebas
+
+```powershell
+py -B -m unittest discover -s tests -p "test_*.py"
+```
+
 ## Estructura
 
 | Archivo | Contenido |
@@ -29,6 +49,7 @@ py main.py
 | `cybtanks/audio.py` | Generación y reproducción de los efectos de sonido. |
 | `cybtanks/enemy_ai.py` | Movimiento, puntería y cálculo de rebotes enemigos. |
 | `cybtanks/renderer.py` | Carga de assets y dibujo de toda la interfaz. |
+| `cybtanks/input_manager.py` | Estado unificado, hotplug y controles de teclado, raton y mando. |
 | `cybtanks/game.py` | Niveles, eventos y coordinación de los sistemas. |
 | `data/enemies.csv` | Cualidades editables de cada tipo de enemigo. |
 | `data/ai_profiles.json` | Percepción, táctica, coordinación y presupuestos de rendimiento. |

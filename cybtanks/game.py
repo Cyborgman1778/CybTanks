@@ -30,6 +30,7 @@ from .config import (
 )
 from .enemy_ai import EnemyAISystem
 from .geometry import clamp
+from .input_manager import InputManager, InputState
 from .levels import enemy_layout, map_layout, player_spawn, shielded_dark_gray_count
 from .mines import MineSystem
 from .models import Bullet, ExplosionEffect, Mine, Particle, Tank, TrackMark, Vec2
@@ -48,6 +49,8 @@ class Game:
         pygame.display.set_caption("CybTanks")
         self.screen = pygame.display.set_mode(WINDOW_SIZE)
         self.clock = pygame.time.Clock()
+        self.input_manager = InputManager()
+        self._input_actions_blocked = False
         self.running = True
         self.next_tank_id = 1
         self.elapsed = 0.0
@@ -73,6 +76,7 @@ class Game:
         self.enemy_ai = EnemyAISystem(self)
         self.renderer = Renderer(self)
         self.reset_campaign()
+        self.input_state = self.input_manager.state
 
     def make_tank(
         self,
@@ -240,20 +244,12 @@ class Game:
     def all_tanks(self) -> list[Tank]:
         return [self.player, *self.enemies]
 
-    def update_player(self, dt: float) -> None:
+    def update_player(self, dt: float, input_state: InputState) -> None:
         if not self.player.alive:
             return
-        keys = pygame.key.get_pressed()
-        horizontal = int(keys[pygame.K_d] or keys[pygame.K_RIGHT]) - int(
-            keys[pygame.K_a] or keys[pygame.K_LEFT]
-        )
-        vertical = int(keys[pygame.K_s] or keys[pygame.K_DOWN]) - int(
-            keys[pygame.K_w] or keys[pygame.K_UP]
-        )
-        direction = Vec2(horizontal, vertical)
+        direction = input_state.move_vector
 
         if direction.length_squared() > 0:
-            direction.normalize_ip()
             actual_movement = self.world.move_tank(
                 self.player,
                 direction * self.player.speed * dt,
@@ -265,9 +261,18 @@ class Game:
         else:
             self.player.velocity.update(0, 0)
 
-        aim = self.mouse_world - self.player.position
+        aim = input_state.aim_world_pos - self.player.position
         if aim.length_squared() > 0:
-            self.player.turret_angle = math.atan2(aim.y, aim.x)
+            input_state.aim_vector = aim.normalize()
+            self.player.turret_angle = math.atan2(
+                input_state.aim_vector.y,
+                input_state.aim_vector.x,
+            )
+
+        if input_state.shoot_triggered:
+            self.combat.shoot(self.player)
+        if input_state.special_triggered:
+            self.mine_system.place(self.player)
 
     def destroy_tank(self, tank: Tank, play_destruction_sound: bool = True) -> None:
         if not tank.alive:
@@ -364,8 +369,28 @@ class Game:
             clamp(y - HUD_HEIGHT, 0, BOARD_HEIGHT),
         )
 
+    def confirm_end_state(self) -> bool:
+        if self.state == "level_clear":
+            self.next_level()
+        elif self.state == "life_lost":
+            self.respawn_player()
+        elif self.state == "game_over":
+            self.start_level()
+        else:
+            return False
+        return True
+
     def handle_events(self) -> None:
-        for event in pygame.event.get():
+        self._input_actions_blocked = False
+        for event in self.input_manager.poll_events():
+            if event.type in (pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN):
+                self.update_mouse(event.pos)
+
+            actions_enabled = self.state == "playing" and not self._input_actions_blocked
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                actions_enabled = actions_enabled and self.mouse_on_board
+            self.input_manager.handle_event(event, actions_enabled=actions_enabled)
+
             if event.type == pygame.QUIT:
                 self.running = False
             elif event.type == pygame.KEYDOWN:
@@ -376,26 +401,36 @@ class Game:
                         self.respawn_player()
                     else:
                         self.start_level()
-                elif event.key == pygame.K_SPACE and self.state == "playing":
-                    self.mine_system.place(self.player)
+                    self._input_actions_blocked = True
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE) and self.state == "level_clear":
                     self.next_level()
-            elif event.type == pygame.MOUSEMOTION:
-                self.update_mouse(event.pos)
+                    self._input_actions_blocked = True
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                self.update_mouse(event.pos)
-                if self.state == "level_clear":
-                    self.next_level()
-                elif self.state == "life_lost":
-                    self.respawn_player()
-                elif self.state == "game_over":
-                    self.start_level()
-                elif self.mouse_on_board:
-                    self.combat.shoot(self.player)
+                if self.confirm_end_state():
+                    self._input_actions_blocked = True
+            elif (
+                event.type == pygame.CONTROLLERBUTTONDOWN
+                and event.button == pygame.CONTROLLER_BUTTON_A
+            ) or (
+                event.type == pygame.JOYBUTTONDOWN
+                and event.button == 0
+            ):
+                if self.confirm_end_state():
+                    self._input_actions_blocked = True
 
     def update(self, dt: float) -> None:
         self.elapsed += dt
-        self.update_mouse(pygame.mouse.get_pos())
+        self.update_mouse(self.input_manager.mouse_position())
+        self.input_state = self.input_manager.update(
+            self.player.position,
+            self.mouse_world,
+            actions_enabled=(
+                self.state == "playing" and not self._input_actions_blocked
+            ),
+            dt=dt,
+            world_size=(BOARD_WIDTH, BOARD_HEIGHT),
+        )
+        self._input_actions_blocked = False
         for tank in self.all_tanks():
             tank.cooldown = max(0.0, tank.cooldown - dt)
             tank.shot_think_timer = max(0.0, tank.shot_think_timer - dt)
@@ -405,7 +440,7 @@ class Game:
             starting_positions = {
                 tank.tank_id: tank.position.copy() for tank in self.all_tanks() if tank.alive
             }
-            self.update_player(dt)
+            self.update_player(dt, self.input_state)
             self.enemy_ai.update(dt)
             self.record_tank_tracks(starting_positions)
             self.combat.update(dt)
@@ -423,4 +458,5 @@ class Game:
             self.handle_events()
             self.update(dt)
             self.render()
+        self.input_manager.close()
         pygame.quit()
