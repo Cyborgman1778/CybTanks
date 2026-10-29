@@ -325,6 +325,11 @@ class CombatSystem:
         for other in getattr(self.game, "bullets", ()):
             if other is bullet or not other.alive or other.velocity.length_squared() == 0:
                 continue
+            if (
+                other.owner_id == bullet.owner_id
+                and segment_velocity.dot(other.velocity) > 0
+            ):
+                continue
             relative_start = start - (other.position + other.velocity * start_time)
             relative_velocity = segment_velocity - other.velocity
             relative_speed_squared = relative_velocity.length_squared()
@@ -714,7 +719,14 @@ class CombatSystem:
                 if not first.alive:
                     continue
                 for second in self.game.bullets[first_index + 1 :]:
-                    if not second.alive or not self.bullets_touch(first, second):
+                    if not second.alive:
+                        continue
+                    if (
+                        first.owner_id == second.owner_id
+                        and first.velocity.dot(second.velocity) > 0
+                    ):
+                        continue
+                    if not self.bullets_touch(first, second):
                         continue
                     impact = (first.position + second.position) / 2
                     first.alive = False
