@@ -30,6 +30,7 @@ from .config import (
 )
 from .enemy_ai import EnemyAISystem
 from .geometry import clamp
+from .input_manager import InputManager
 from .levels import enemy_layout, map_layout, player_spawn, shielded_dark_gray_count
 from .mines import MineSystem
 from .models import Bullet, ExplosionEffect, Mine, Particle, Tank, TrackMark, Vec2
@@ -72,6 +73,7 @@ class Game:
         self.mine_system = MineSystem(self)
         self.enemy_ai = EnemyAISystem(self)
         self.renderer = Renderer(self)
+        self.input_manager = InputManager()
         self.reset_campaign()
 
     def make_tank(
@@ -243,17 +245,12 @@ class Game:
     def update_player(self, dt: float) -> None:
         if not self.player.alive:
             return
-        keys = pygame.key.get_pressed()
-        horizontal = int(keys[pygame.K_d] or keys[pygame.K_RIGHT]) - int(
-            keys[pygame.K_a] or keys[pygame.K_LEFT]
-        )
-        vertical = int(keys[pygame.K_s] or keys[pygame.K_DOWN]) - int(
-            keys[pygame.K_w] or keys[pygame.K_UP]
-        )
-        direction = Vec2(horizontal, vertical)
+        input_state = self.input_manager.update(self.player.position)
+        direction = input_state.move_vector.copy()
 
         if direction.length_squared() > 0:
-            direction.normalize_ip()
+            if direction.length_squared() > 1.0:
+                direction.normalize_ip()
             actual_movement = self.world.move_tank(
                 self.player,
                 direction * self.player.speed * dt,
@@ -265,14 +262,26 @@ class Game:
         else:
             self.player.velocity.update(0, 0)
 
-        aim = self.mouse_world - self.player.position
+        aim = input_state.aim_vector
         if aim.length_squared() > 0:
             self.player.turret_angle = math.atan2(aim.y, aim.x)
+
+        self.mouse_world = input_state.aim_world_pos
+        self.mouse_on_board = (input_state.active_mode == "GAMEPAD") or (
+            0 <= self.mouse_world.x <= BOARD_WIDTH and 0 <= self.mouse_world.y <= BOARD_HEIGHT
+        )
+
+        if input_state.shoot_triggered:
+            self.combat.shoot(self.player)
+        if input_state.special_triggered and self.state == "playing":
+            self.mine_system.place(self.player)
 
     def destroy_tank(self, tank: Tank, play_destruction_sound: bool = True) -> None:
         if not tank.alive:
             return
         tank.alive = False
+        if tank.team == "player":
+            self.input_manager.rumble(0.8, 0.8, 400)
         self.wrecks.append((tank.position.copy(), tank.body_angle, tank.color))
         self.create_burst(tank.position, tank.color, 28, 145)
         self.create_burst(tank.position, (246, 224, 164), 12, 95)
@@ -366,6 +375,7 @@ class Game:
 
     def handle_events(self) -> None:
         for event in pygame.event.get():
+            self.input_manager.handle_event(event)
             if event.type == pygame.QUIT:
                 self.running = False
             elif event.type == pygame.KEYDOWN:
@@ -376,8 +386,6 @@ class Game:
                         self.respawn_player()
                     else:
                         self.start_level()
-                elif event.key == pygame.K_SPACE and self.state == "playing":
-                    self.mine_system.place(self.player)
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE) and self.state == "level_clear":
                     self.next_level()
             elif event.type == pygame.MOUSEMOTION:
@@ -390,8 +398,21 @@ class Game:
                     self.respawn_player()
                 elif self.state == "game_over":
                     self.start_level()
-                elif self.mouse_on_board:
-                    self.combat.shoot(self.player)
+
+        if self.input_manager.restart_triggered:
+            if self.state == "life_lost":
+                self.respawn_player()
+            else:
+                self.start_level()
+        elif self.input_manager.confirm_triggered:
+            if self.state == "level_clear":
+                self.next_level()
+            elif self.state == "life_lost":
+                self.respawn_player()
+            elif self.state == "game_over":
+                self.start_level()
+        elif self.input_manager.escape_triggered:
+            self.running = False
 
     def update(self, dt: float) -> None:
         self.elapsed += dt
@@ -411,6 +432,8 @@ class Game:
             self.combat.update(dt)
             self.mine_system.update(dt)
             self.evaluate_state()
+        else:
+            self.input_manager.update(self.player.position if hasattr(self, "player") else None)
         self.update_particles(dt)
         self.update_effects(dt)
 

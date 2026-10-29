@@ -249,26 +249,32 @@ class Renderer:
             pygame.draw.circle(surface, color, particle.position, max(1, int(particle.size * alpha)))
 
     def draw_reticle(self, surface: pygame.Surface) -> None:
-        if not self.game.mouse_on_board or self.game.state != "playing":
+        if self.game.state != "playing":
             return
-        radius = 10 + math.sin(self.game.elapsed * 5) * 1.5
-        center = self.game.mouse_world
-        pygame.draw.circle(surface, CREAM, center, int(radius), 1)
-        pygame.draw.line(surface, CREAM, center + Vec2(-18, 0), center + Vec2(-6, 0), 1)
-        pygame.draw.line(surface, CREAM, center + Vec2(18, 0), center + Vec2(6, 0), 1)
-        pygame.draw.line(surface, CREAM, center + Vec2(0, -18), center + Vec2(0, -6), 1)
-        pygame.draw.line(surface, CREAM, center + Vec2(0, 18), center + Vec2(0, 6), 1)
+        input_state = self.game.input_manager.get_state()
+        if input_state.active_mode == "KBM" and not self.game.mouse_on_board:
+            return
+        self.game.input_manager.draw_crosshair(
+            surface,
+            self.game.player.position,
+            CREAM,
+            radius=10 + math.sin(self.game.elapsed * 5) * 1.5,
+        )
 
     def draw_aim_guide(self, surface: pygame.Surface) -> None:
         player = self.game.player
-        if not player.alive or not self.game.mouse_on_board or self.game.state != "playing":
+        if not player.alive or self.game.state != "playing":
             return
-        difference = self.game.mouse_world - player.position
+        input_state = self.game.input_manager.get_state()
+        if input_state.active_mode == "KBM" and not self.game.mouse_on_board:
+            return
+        target_pos = input_state.aim_world_pos
+        difference = target_pos - player.position
         if difference.length() <= 35:
             return
         direction = difference.normalize()
         start = player.position + direction * 34
-        length = start.distance_to(self.game.mouse_world)
+        length = start.distance_to(target_pos)
         dash_length = 7
         gap = 7
         for distance in range(0, max(0, int(length - 8)), dash_length + gap):
