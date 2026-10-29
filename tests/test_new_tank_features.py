@@ -195,5 +195,91 @@ class MineExplosionBulletTests(unittest.TestCase):
         self.assertEqual(game.bullets, [outside])
 
 
+
+
+class BulletCollisionRulesTests(unittest.TestCase):
+    def test_burst_bullets_same_owner_same_direction_do_not_cancel(self) -> None:
+        """Bullets from same owner moving in same direction overlap (as in a fast burst) but do not cancel."""
+        b1 = Bullet(Vec2(61.8, 200), Vec2(230, 0), "player", owner_id=1, color=(1, 2, 3))
+        b2 = Bullet(Vec2(45.0, 200), Vec2(230, 0), "player", owner_id=1, color=(1, 2, 3))
+
+        # Confirm that geometrically their collision capsules touch
+        self.assertTrue(CombatSystem.bullets_touch(b1, b2))
+
+        sounds: list[str] = []
+        game = SimpleNamespace(
+            bullets=[b1, b2],
+            all_tanks=lambda: [],
+            enemies=[],
+            mines=[],
+            audio=SimpleNamespace(play_bullet_disintegrate=lambda: sounds.append("disintegrate")),
+            create_burst=lambda *args: None,
+            mine_system=SimpleNamespace(collide_bullet=lambda b: False),
+            world=SimpleNamespace(circle_touches_wall=lambda pos: False),
+        )
+        combat = CombatSystem(game)
+
+        combat.update(1 / 60)
+
+        # Both bullets should remain alive!
+        self.assertTrue(b1.alive)
+        self.assertTrue(b2.alive)
+        self.assertEqual(len(sounds), 0)
+
+    def test_bounced_bullet_opposing_direction_same_owner_does_cancel(self) -> None:
+        """If a bullet bounced off a wall and returns towards the shooter (dot <= 0), it can cancel a new bullet."""
+        b1 = Bullet(Vec2(60.0, 200), Vec2(-230, 0), "player", owner_id=1, color=(1, 2, 3), bounces=1)
+        b2 = Bullet(Vec2(50.0, 200), Vec2(230, 0), "player", owner_id=1, color=(1, 2, 3))
+
+        self.assertTrue(CombatSystem.bullets_touch(b1, b2))
+
+        sounds: list[str] = []
+        game = SimpleNamespace(
+            bullets=[b1, b2],
+            all_tanks=lambda: [],
+            enemies=[],
+            mines=[],
+            audio=SimpleNamespace(play_bullet_disintegrate=lambda: sounds.append("disintegrate")),
+            create_burst=lambda *args: None,
+            mine_system=SimpleNamespace(collide_bullet=lambda b: False),
+            world=SimpleNamespace(circle_touches_wall=lambda pos: False),
+        )
+        combat = CombatSystem(game)
+
+        combat.update(1 / 60)
+
+        # Both bullets should destroy each other
+        self.assertFalse(b1.alive)
+        self.assertFalse(b2.alive)
+        self.assertIn("disintegrate", sounds)
+
+    def test_hostile_bullets_touching_cancel(self) -> None:
+        """Bullets from different owners always cancel when touching."""
+        b_player = Bullet(Vec2(61.8, 200), Vec2(230, 0), "player", owner_id=1, color=(1, 2, 3))
+        b_enemy = Bullet(Vec2(45.0, 200), Vec2(230, 0), "enemy", owner_id=2, color=(4, 5, 6))
+
+        self.assertTrue(CombatSystem.bullets_touch(b_player, b_enemy))
+
+        sounds: list[str] = []
+        game = SimpleNamespace(
+            bullets=[b_player, b_enemy],
+            all_tanks=lambda: [],
+            enemies=[],
+            mines=[],
+            audio=SimpleNamespace(play_bullet_disintegrate=lambda: sounds.append("disintegrate")),
+            create_burst=lambda *args: None,
+            mine_system=SimpleNamespace(collide_bullet=lambda b: False),
+            world=SimpleNamespace(circle_touches_wall=lambda pos: False),
+        )
+        combat = CombatSystem(game)
+
+        combat.update(1 / 60)
+
+        # Hostile bullets cancel
+        self.assertFalse(b_player.alive)
+        self.assertFalse(b_enemy.alive)
+        self.assertIn("disintegrate", sounds)
+
+
 if __name__ == "__main__":
     unittest.main()
