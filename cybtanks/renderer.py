@@ -25,6 +25,7 @@ from .config import (
     TILE,
 )
 from .geometry import clamp, oriented_box
+from .input_manager import GAMEPAD_MODE
 from .models import Bullet, Mine, Particle, Tank, Vec2
 
 if TYPE_CHECKING:
@@ -251,30 +252,28 @@ class Renderer:
     def draw_reticle(self, surface: pygame.Surface) -> None:
         if self.game.state != "playing":
             return
-        input_state = self.game.input_manager.get_state()
-        if input_state.active_mode == "KBM" and not self.game.mouse_on_board:
+        if self.game.input_state.active_mode != GAMEPAD_MODE and not self.game.mouse_on_board:
             return
-        self.game.input_manager.draw_crosshair(
-            surface,
-            self.game.player.position,
-            CREAM,
-            radius=10 + math.sin(self.game.elapsed * 5) * 1.5,
-        )
+        gamepad_screen_pos = self.game.input_state.aim_world_pos + Vec2(0, HUD_HEIGHT)
+        self.game.input_manager.draw_crosshair(surface, gamepad_screen_pos)
 
     def draw_aim_guide(self, surface: pygame.Surface) -> None:
         player = self.game.player
         if not player.alive or self.game.state != "playing":
             return
-        input_state = self.game.input_manager.get_state()
-        if input_state.active_mode == "KBM" and not self.game.mouse_on_board:
+        input_state = self.game.input_state
+        if input_state.active_mode == GAMEPAD_MODE:
+            target = input_state.aim_world_pos
+        elif self.game.mouse_on_board:
+            target = input_state.aim_world_pos
+        else:
             return
-        target_pos = input_state.aim_world_pos
-        difference = target_pos - player.position
+        difference = target - player.position
         if difference.length() <= 35:
             return
         direction = difference.normalize()
         start = player.position + direction * 34
-        length = start.distance_to(target_pos)
+        length = start.distance_to(target)
         dash_length = 7
         gap = 7
         for distance in range(0, max(0, int(length - 8)), dash_length + gap):
@@ -292,11 +291,11 @@ class Renderer:
         subtitle = self.small_font.render("SIMULADOR TACTICO // GRID 07", True, MUTED)
         screen.blit(subtitle, (22, 57))
 
-        controls = self.small_font.render(
-            "WASD/FLECHAS   LMB: DISPARAR   ESPACIO: MINA   R: REINTENTAR",
-            True,
-            MUTED,
-        )
+        if self.game.input_state.active_mode == GAMEPAD_MODE:
+            controls_text = "LS: MOVER   RS: APUNTAR   RT/RB: DISPARAR   LT/A: MINA"
+        else:
+            controls_text = "WASD/FLECHAS   LMB: DISPARAR   ESPACIO/SHIFT/E: MINA"
+        controls = self.small_font.render(controls_text, True, MUTED)
         screen.blit(controls, (285, 23))
         rule = self.small_font.render(
             "ROSADO: IA TACTICA   //   VERDE: BALA RAPIDA   //   AMARILLO: MINAS",
@@ -339,15 +338,15 @@ class Renderer:
         life_lost = self.game.state == "life_lost"
         if level_clear:
             text = f"NIVEL {self.game.level} SUPERADO"
-            prompt_text = "CLIC O ENTER: SIGUIENTE NIVEL"
+            prompt_text = "CLIC, ENTER O A: SIGUIENTE NIVEL"
             color = (143, 232, 215)
         elif life_lost:
             text = "VIDA PERDIDA"
-            prompt_text = "PULSA R O HAZ CLIC PARA REAPARECER"
+            prompt_text = "PULSA R, A O HAZ CLIC PARA REAPARECER"
             color = (255, 181, 112)
         else:
             text = "SIN VIDAS"
-            prompt_text = "PULSA R O HAZ CLIC PARA REINICIAR EL NIVEL"
+            prompt_text = "PULSA R, A O HAZ CLIC PARA REINICIAR EL NIVEL"
             color = (255, 139, 114)
         title = self.end_font.render(text, True, color)
         prompt = self.hud_font.render(prompt_text, True, CREAM)
@@ -368,7 +367,7 @@ class Renderer:
         self.draw_bullets(board)
         self.draw_explosions(board)
         self.draw_particles(board, self.game.particles)
-        self.draw_reticle(board)
         self.draw_end_screen(board)
         self.game.screen.blit(board, (0, HUD_HEIGHT))
+        self.draw_reticle(self.game.screen)
         pygame.display.flip()
